@@ -1,0 +1,301 @@
+﻿{% extends "base.html" %}
+{% block title %}GitHub Integration{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>&#128025; GitHub Integration</h2>
+  <p>Connect your GitHub repository, sync code, validate Terraform, detect drift, and create PRs</p>
+</div>
+
+<div id="gh-alert" class="alert"></div>
+
+<!-- GitHub Settings -->
+<div class="section">
+  <div class="section-title">Repository Settings</div>
+  <div class="card" style="max-width:700px;">
+    <div style="display:grid; gap:12px;">
+      <div>
+        <label class="form-label">GitHub Personal Access Token (PAT)</label>
+        <input type="password" id="gh-pat" class="form-input" placeholder="ghp_xxxxxxxxxxxx">
+        <small class="form-hint">Needs repo scope. Create at github.com/settings/tokens</small>
+      </div>
+      <div>
+        <label class="form-label">Repository (owner/repo)</label>
+        <input type="text" id="gh-repo" class="form-input" placeholder="org/terraform-infra">
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="saveGitHubSettings()">&#128190; Save Settings</button>
+        <button class="btn btn-outline" onclick="testConnection()">&#128268; Test Connection</button>
+      </div>
+    </div>
+    <div id="gh-conn-status" style="margin-top:12px;"></div>
+  </div>
+</div>
+
+<!-- Sync & Validate -->
+<div class="section">
+  <div class="section-title">Repository Operations</div>
+  <div class="card-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+    <div class="card">
+      <div class="card-label">Sync from GitHub</div>
+      <p style="font-size:13px;color:var(--text-secondary);margin:8px 0;">Pull latest code from your repo</p>
+      <button class="btn btn-outline" onclick="syncRepo()" id="btn-sync">&#8595; Pull Latest</button>
+    </div>
+    <div class="card">
+      <div class="card-label">Validate Code</div>
+      <p style="font-size:13px;color:var(--text-secondary);margin:8px 0;">Check TF syntax, formatting, best practices</p>
+      <button class="btn btn-outline" onclick="validateRepo()" id="btn-validate">&#9989; Validate</button>
+    </div>
+    <div class="card">
+      <div class="card-label">Drift Detection</div>
+      <p style="font-size:13px;color:var(--text-secondary);margin:8px 0;">Compare code vs live AWS with attribute diffs</p>
+      <button class="btn btn-outline" onclick="driftDiff()" id="btn-drift">&#128269; Detect Drift</button>
+    </div>
+    <div class="card">
+      <div class="card-label">Create PR</div>
+      <p style="font-size:13px;color:var(--text-secondary);margin:8px 0;">AI fix + PR for drift changes</p>
+      <button class="btn btn-primary" onclick="createDriftPR()" id="btn-pr">&#128221; Create Drift PR</button>
+    </div>
+  </div>
+</div>
+
+<!-- Validation Issues -->
+<div class="section" id="validation-section" style="display:none;">
+  <div class="section-title">Code Validation Results</div>
+  <div class="card-grid" style="grid-template-columns: repeat(3, 1fr);">
+    <div class="card"><div class="card-label">TF Files</div><div class="card-value" id="val-files">-</div></div>
+    <div class="card"><div class="card-label">Valid</div><div class="card-value" id="val-valid">-</div></div>
+    <div class="card"><div class="card-label">Issues</div><div class="card-value" id="val-issues" style="color:var(--red);">-</div></div>
+  </div>
+  <div class="table-wrap" id="issues-table-wrap" style="display:none;margin-top:16px;">
+    <table>
+      <thead><tr><th>Severity</th><th>Source</th><th>Message</th></tr></thead>
+      <tbody id="issues-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Drift Diff -->
+<div class="section" id="drift-section" style="display:none;">
+  <div class="section-title">Drift Analysis <span id="drift-count" class="badge badge-yellow"></span></div>
+  <div id="drift-resources"></div>
+  <div class="log-box" id="drift-plan-output" style="margin-top:16px;max-height:300px;"></div>
+</div>
+
+<!-- Operation Log -->
+<div class="section">
+  <div class="section-title">Operation Log</div>
+  <div class="log-box" id="gh-log">Waiting for operation...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', loadGitHubConfig);
+
+async function loadGitHubConfig() {
+  try {
+    const data = await apiGet('/ui/api/config');
+    if (data.ok) {
+      document.getElementById('gh-repo').value = data.data.github_repo || '';
+      if (data.data.github_pat_set) {
+        document.getElementById('gh-pat').placeholder = '********** (already configured)';
+      }
+    }
+  } catch(e) {}
+}
+
+async function saveGitHubSettings() {
+  const pat = document.getElementById('gh-pat').value.trim();
+  const repo = document.getElementById('gh-repo').value.trim();
+  if (!repo) {
+    showAlert('gh-alert', 'Repository name is required.', 'error'); return;
+  }
+  const payload = { github_repo: repo };
+  if (pat) payload.github_pat = pat;
+  try {
+    const data = await apiPost('/github/save_settings', payload);
+    if (data.ok) {
+      showAlert('gh-alert', 'GitHub settings saved!', 'success');
+      if (pat) {
+        document.getElementById('gh-pat').value = '';
+        document.getElementById('gh-pat').placeholder = '********** (configured)';
+      }
+    } else {
+      showAlert('gh-alert', data.error, 'error');
+    }
+  } catch(e) { showAlert('gh-alert', e.message, 'error'); }
+}
+
+async function testConnection() {
+  const status = document.getElementById('gh-conn-status');
+  status.innerHTML = '<span class="spinner"></span> Testing...';
+  try {
+    const data = await apiPost('/github/test', {});
+    if (data.ok) {
+      const d = data.data;
+      status.innerHTML = '<span class="badge badge-green">Connected</span> ' +
+        '<strong>' + d.repo + '</strong> (default: ' + d.default_branch + ')' +
+        '<br><small>Branches: ' + d.branches.join(', ') + '</small>';
+    } else {
+      status.innerHTML = '<span class="badge badge-red">Failed</span> ' + data.error;
+    }
+  } catch(e) { status.innerHTML = '<span class="badge badge-red">Error</span> ' + e.message; }
+}
+
+async function syncRepo() {
+  const btn = document.getElementById('btn-sync');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Syncing...';
+  const log = document.getElementById('gh-log');
+  log.textContent = 'Syncing from GitHub...\n';
+  try {
+    const data = await apiPost('/github/sync', {});
+    if (data.ok) {
+      log.textContent += data.data.action + ': ' + (data.data.stdout || '') + '\n' + (data.data.stderr || '');
+      showAlert('gh-alert', 'Repository synced (' + data.data.action + ')', 'success');
+    } else {
+      log.textContent += 'Error: ' + data.error;
+      showAlert('gh-alert', data.error, 'error');
+    }
+  } catch(e) { log.textContent += 'Error: ' + e.message; }
+  btn.disabled = false; btn.innerHTML = '&#8595; Pull Latest';
+}
+
+async function validateRepo() {
+  const btn = document.getElementById('btn-validate');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Validating...';
+  const log = document.getElementById('gh-log');
+  log.textContent = 'Validating Terraform code...\n';
+  try {
+    const data = await apiPost('/github/validate_repo', {});
+    if (data.ok) {
+      const d = data.data;
+      const section = document.getElementById('validation-section');
+      section.style.display = '';
+      document.getElementById('val-files').textContent = d.tf_files.length;
+      document.getElementById('val-valid').innerHTML = d.valid
+        ? '<span style="color:var(--green)">Yes</span>'
+        : '<span style="color:var(--red)">No</span>';
+      document.getElementById('val-issues').textContent = d.issues.length;
+
+      if (d.issues.length > 0) {
+        const tbody = document.getElementById('issues-body');
+        tbody.innerHTML = '';
+        d.issues.forEach(iss => {
+          const sevClass = iss.severity === 'error' ? 'badge-red' : 'badge-yellow';
+          tbody.innerHTML += '<tr>' +
+            '<td><span class="badge ' + sevClass + '">' + iss.severity + '</span></td>' +
+            '<td>' + iss.source + '</td>' +
+            '<td><pre style="margin:0;white-space:pre-wrap;font-size:12px;">' + iss.message + '</pre></td></tr>';
+        });
+        document.getElementById('issues-table-wrap').style.display = '';
+      } else {
+        document.getElementById('issues-table-wrap').style.display = 'none';
+      }
+
+      log.textContent += 'Validation complete: ' + d.tf_files.length + ' file(s), ' + d.issues.length + ' issue(s)';
+      showAlert('gh-alert', d.valid ? 'Code is valid!' : d.issues.length + ' issue(s) found', d.valid ? 'success' : 'error');
+    } else {
+      log.textContent += 'Error: ' + data.error;
+    }
+  } catch(e) { log.textContent += 'Error: ' + e.message; }
+  btn.disabled = false; btn.innerHTML = '&#9989; Validate';
+}
+
+async function driftDiff() {
+  const btn = document.getElementById('btn-drift');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Detecting...';
+  const log = document.getElementById('gh-log');
+  log.textContent = 'Running terraform plan to detect drift...\n';
+  try {
+    const data = await apiPost('/github/drift_diff', {});
+    if (data.ok) {
+      const d = data.data;
+      const section = document.getElementById('drift-section');
+      section.style.display = '';
+
+      if (!d.has_drift) {
+        document.getElementById('drift-count').textContent = 'No drift';
+        document.getElementById('drift-count').className = 'badge badge-green';
+        document.getElementById('drift-resources').innerHTML = '<p style="color:var(--green);">Infrastructure matches desired state.</p>';
+        showAlert('gh-alert', 'No drift detected!', 'success');
+      } else {
+        document.getElementById('drift-count').textContent = d.resources.length + ' resource(s) drifted';
+        document.getElementById('drift-count').className = 'badge badge-red';
+
+        let html = '';
+        d.resources.forEach(r => {
+          const actionBadge = r.actions.includes('delete')
+            ? '<span class="badge badge-red">' + r.actions.join(', ') + '</span>'
+            : r.actions.includes('create')
+              ? '<span class="badge badge-blue">' + r.actions.join(', ') + '</span>'
+              : '<span class="badge badge-yellow">' + r.actions.join(', ') + '</span>';
+
+          html += '<div class="drift-resource-card">';
+          html += '<div class="drift-resource-header">';
+          html += '<strong>' + r.address + '</strong> ' + actionBadge;
+          html += '</div>';
+
+          if (r.diffs && r.diffs.length > 0) {
+            html += '<table class="diff-table"><thead><tr><th>Attribute</th><th>Before (Live)</th><th>After (Code)</th></tr></thead><tbody>';
+            r.diffs.forEach(d => {
+              html += '<tr><td><code>' + d.attribute + '</code></td>';
+              html += '<td class="diff-before">' + escapeHtml(d.before) + '</td>';
+              html += '<td class="diff-after">' + escapeHtml(d.after) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+          }
+          html += '</div>';
+        });
+        document.getElementById('drift-resources').innerHTML = html;
+        showAlert('gh-alert', d.resources.length + ' resource(s) have drifted from desired state.', 'error');
+      }
+
+      document.getElementById('drift-plan-output').textContent = d.plan_text || '';
+      log.textContent += 'Drift analysis complete.';
+    } else {
+      log.textContent += 'Error: ' + data.error;
+      showAlert('gh-alert', data.error, 'error');
+    }
+  } catch(e) { log.textContent += 'Error: ' + e.message; }
+  btn.disabled = false; btn.innerHTML = '&#128269; Detect Drift';
+}
+
+async function createDriftPR() {
+  if (!confirm('This will:\n1. Detect drift\n2. Generate AI fix\n3. Create a PR on GitHub\n\nProceed?')) return;
+
+  const btn = document.getElementById('btn-pr');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Creating PR...';
+  const log = document.getElementById('gh-log');
+  log.textContent = 'Creating drift fix PR...\n';
+  try {
+    const data = await apiPost('/github/create_drift_pr', {});
+    if (data.ok) {
+      const d = data.data;
+      if (d.message) {
+        log.textContent += d.message;
+        showAlert('gh-alert', d.message, 'info');
+      } else if (d.pr_url) {
+        log.textContent += 'PR created: ' + d.pr_url + '\nBranch: ' + d.branch;
+        showAlert('gh-alert', '<a href="' + d.pr_url + '" target="_blank" style="color:#fff;text-decoration:underline;">PR created — click to review</a>', 'success');
+      } else if (d.error) {
+        log.textContent += 'Error: ' + d.error;
+        showAlert('gh-alert', d.error, 'error');
+      } else {
+        log.textContent += JSON.stringify(d, null, 2);
+      }
+    } else {
+      log.textContent += 'Error: ' + data.error;
+      showAlert('gh-alert', data.error, 'error');
+    }
+  } catch(e) { log.textContent += 'Error: ' + e.message; }
+  btn.disabled = false; btn.innerHTML = '&#128221; Create Drift PR';
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+</script>
+{% endblock %}

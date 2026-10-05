@@ -1,0 +1,564 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Settings</h2>
+  <p>Manage scheduler, view and edit configuration, and control the agent</p>
+</div>
+
+<div id="settings-alert" class="alert"></div>
+
+<!-- Scheduler Control -->
+<div class="section">
+  <div class="section-title">Scheduler Control</div>
+  <div class="card" style="max-width:500px;">
+    <div class="card-label">Background Drift Check Scheduler</div>
+    <div style="margin: 12px 0;">
+      <span id="sched-status" class="badge badge-yellow">Unknown</span>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="startScheduler()">&#9654; Start Scheduler</button>
+      <button class="btn btn-danger" onclick="stopScheduler()">&#9632; Stop Scheduler</button>
+    </div>
+  </div>
+</div>
+
+<!-- All Settings -->
+<div class="section">
+  <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+    <span>Configuration</span>
+  </div>
+
+  <!-- Server & Agent -->
+  <div class="settings-group" data-group="server">
+    <div class="settings-group-title" style="display:flex;align-items:center;justify-content:space-between;">
+      <span>Server &amp; Agent</span>
+      <div>
+        <button class="btn btn-outline btn-sm grp-btn-edit" onclick="enterGroupEdit('server')">&#9998; Edit</button>
+        <button class="btn btn-primary btn-sm grp-btn-save" onclick="saveGroup('server')" style="display:none;">&#10003; Save</button>
+        <button class="btn btn-outline btn-sm grp-btn-cancel" onclick="cancelGroupEdit('server')" style="display:none;">Cancel</button>
+      </div>
+    </div>
+    <div class="settings-grid">
+      <div class="settings-row">
+        <label class="settings-label">Agent Workdir</label>
+        <span class="settings-value" id="val-AGENT_WORKDIR">—</span>
+        <input class="settings-input" id="inp-AGENT_WORKDIR" style="display:none;" />
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">Port</label>
+        <span class="settings-value" id="val-MCP_PORT">—</span>
+        <input class="settings-input" id="inp-MCP_PORT" type="number" style="display:none;" />
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">Approval Mode</label>
+        <span class="settings-value" id="val-APPROVAL_MODE">—</span>
+        <select class="settings-input" id="inp-APPROVAL_MODE" style="display:none;">
+          <option value="pr">pr</option>
+          <option value="auto">auto</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">Drift Check Interval (min)</label>
+        <span class="settings-value" id="val-DRIFT_CHECK_INTERVAL_MINUTES">—</span>
+        <input class="settings-input" id="inp-DRIFT_CHECK_INTERVAL_MINUTES" type="number" style="display:none;" />
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">Cost Threshold ($)</label>
+        <span class="settings-value" id="val-COST_THRESHOLD">—</span>
+        <input class="settings-input" id="inp-COST_THRESHOLD" type="number" step="0.01" style="display:none;" />
+      </div>
+    </div>
+  </div>
+
+  <!-- LLM Configuration -->
+  <div class="settings-group" data-group="llm">
+    <div class="settings-group-title" style="display:flex;align-items:center;justify-content:space-between;">
+      <span>LLM Configuration</span>
+      <div>
+        <button class="btn btn-outline btn-sm grp-btn-edit" onclick="enterGroupEdit('llm')">&#9998; Edit</button>
+        <button class="btn btn-primary btn-sm grp-btn-save" onclick="saveGroup('llm')" style="display:none;">&#10003; Save</button>
+        <button class="btn btn-outline btn-sm grp-btn-cancel" onclick="cancelGroupEdit('llm')" style="display:none;">Cancel</button>
+      </div>
+    </div>
+    <div class="settings-grid">
+      <div class="settings-row">
+        <label class="settings-label">LLM Provider</label>
+        <span class="settings-value" id="val-LLM_PROVIDER">—</span>
+        <select class="settings-input" id="inp-LLM_PROVIDER" style="display:none;">
+          <option value="bedrock">bedrock</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">Bedrock Model ID</label>
+        <span class="settings-value" id="val-BEDROCK_MODEL_ID">—</span>
+        <input class="settings-input" id="inp-BEDROCK_MODEL_ID" style="display:none;" />
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">Bedrock Region</label>
+        <span class="settings-value" id="val-BEDROCK_REGION">—</span>
+        <input class="settings-input" id="inp-BEDROCK_REGION" style="display:none;" />
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">Bedrock Bearer Token</label>
+        <div class="settings-secret-wrap">
+          <span class="settings-value" id="val-AWS_BEARER_TOKEN_BEDROCK">—</span>
+          <input class="settings-input" id="inp-AWS_BEARER_TOKEN_BEDROCK" type="password" placeholder="bedrock-api-key-..." style="display:none;" />
+          <button class="btn-eye" id="eye-AWS_BEARER_TOKEN_BEDROCK" onclick="toggleEye('AWS_BEARER_TOKEN_BEDROCK')" title="Show/hide value">&#128065;</button>
+        </div>
+      </div>
+      <div class="settings-row" style="align-items:center;">
+        <label class="settings-label">Bedrock Status</label>
+        <span id="bedrock-conn-status" style="font-size:0.92em; color:var(--muted);">Checking...</span>
+        <button class="btn btn-outline btn-sm" onclick="checkBedrockStatus()" style="margin-left:8px; padding:4px 12px; font-size:0.85em;">Refresh</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AWS Configuration -->
+  <div class="settings-group" data-group="aws">
+    <div class="settings-group-title" style="display:flex;align-items:center;justify-content:space-between;">
+      <span>AWS Credentials</span>
+      <div>
+        <button class="btn btn-outline btn-sm grp-btn-edit" onclick="enterGroupEdit('aws')">&#9998; Edit</button>
+        <button class="btn btn-primary btn-sm grp-btn-save" onclick="saveGroup('aws')" style="display:none;">&#10003; Save</button>
+        <button class="btn btn-outline btn-sm grp-btn-cancel" onclick="cancelGroupEdit('aws')" style="display:none;">Cancel</button>
+      </div>
+    </div>
+    <div class="settings-grid">
+      <div class="settings-row">
+        <label class="settings-label">AWS Access Key ID</label>
+        <div class="settings-secret-wrap">
+          <span class="settings-value" id="val-AWS_ACCESS_KEY_ID">—</span>
+          <input class="settings-input" id="inp-AWS_ACCESS_KEY_ID" type="password" placeholder="AKIA..." style="display:none;" />
+          <button class="btn-eye" id="eye-AWS_ACCESS_KEY_ID" onclick="toggleEye('AWS_ACCESS_KEY_ID')" title="Show/hide value">&#128065;</button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">AWS Secret Access Key</label>
+        <div class="settings-secret-wrap">
+          <span class="settings-value" id="val-AWS_SECRET_ACCESS_KEY">—</span>
+          <input class="settings-input" id="inp-AWS_SECRET_ACCESS_KEY" type="password" placeholder="Enter secret key" style="display:none;" />
+          <button class="btn-eye" id="eye-AWS_SECRET_ACCESS_KEY" onclick="toggleEye('AWS_SECRET_ACCESS_KEY')" title="Show/hide value">&#128065;</button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">AWS Session Token</label>
+        <div class="settings-secret-wrap">
+          <span class="settings-value" id="val-AWS_SESSION_TOKEN">—</span>
+          <input class="settings-input" id="inp-AWS_SESSION_TOKEN" type="password" placeholder="Optional — for temporary credentials" style="display:none;" />
+          <button class="btn-eye" id="eye-AWS_SESSION_TOKEN" onclick="toggleEye('AWS_SESSION_TOKEN')" title="Show/hide value">&#128065;</button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">AWS Default Region</label>
+        <span class="settings-value" id="val-AWS_DEFAULT_REGION">—</span>
+        <input class="settings-input" id="inp-AWS_DEFAULT_REGION" style="display:none;" />
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">Terraform State S3 Bucket</label>
+        <span class="settings-value" id="val-TF_STATE_BUCKET">—</span>
+        <input class="settings-input" id="inp-TF_STATE_BUCKET" placeholder="my-tfstate-bucket" style="display:none;" />
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">Terraform State Key</label>
+        <span class="settings-value" id="val-TF_STATE_KEY">—</span>
+        <input class="settings-input" id="inp-TF_STATE_KEY" placeholder="owner/repo/terraform.tfstate" style="display:none;" />
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">Terraform State Region</label>
+        <span class="settings-value" id="val-TF_STATE_REGION">—</span>
+        <input class="settings-input" id="inp-TF_STATE_REGION" placeholder="us-east-1" style="display:none;" />
+      </div>
+      <div class="settings-row" style="align-items:center;">
+        <label class="settings-label">Connection Status</label>
+        <span id="aws-conn-status" style="font-size:0.92em; color:var(--muted);">Checking...</span>
+        <button class="btn btn-outline btn-sm" onclick="checkAwsStatus()" style="margin-left:8px; padding:4px 12px; font-size:0.85em;">Refresh</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- GitHub Integration -->
+  <div class="settings-group" data-group="github">
+    <div class="settings-group-title" style="display:flex;align-items:center;justify-content:space-between;">
+      <span>GitHub Integration</span>
+      <div>
+        <button class="btn btn-outline btn-sm grp-btn-edit" onclick="enterGroupEdit('github')">&#9998; Edit</button>
+        <button class="btn btn-primary btn-sm grp-btn-save" onclick="saveGroup('github')" style="display:none;">&#10003; Save</button>
+        <button class="btn btn-outline btn-sm grp-btn-cancel" onclick="cancelGroupEdit('github')" style="display:none;">Cancel</button>
+      </div>
+    </div>
+    <div class="settings-grid">
+      <div class="settings-row">
+        <label class="settings-label">GitHub Repository</label>
+        <span class="settings-value" id="val-GITHUB_REPO">—</span>
+        <input class="settings-input" id="inp-GITHUB_REPO" placeholder="owner/repo" style="display:none;" />
+      </div>
+      <div class="settings-row">
+        <label class="settings-label">GitHub PAT</label>
+        <div class="settings-secret-wrap">
+          <span class="settings-value" id="val-GITHUB_PAT">—</span>
+          <input class="settings-input" id="inp-GITHUB_PAT" type="password" placeholder="ghp_..." style="display:none;" />
+          <button class="btn-eye" id="eye-GITHUB_PAT" onclick="toggleEye('GITHUB_PAT')" title="Show/hide value">&#128065;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notifications -->
+  <div class="settings-group" data-group="notifications">
+    <div class="settings-group-title" style="display:flex;align-items:center;justify-content:space-between;">
+      <span>Notifications</span>
+      <div>
+        <button class="btn btn-outline btn-sm grp-btn-edit" onclick="enterGroupEdit('notifications')">&#9998; Edit</button>
+        <button class="btn btn-primary btn-sm grp-btn-save" onclick="saveGroup('notifications')" style="display:none;">&#10003; Save</button>
+        <button class="btn btn-outline btn-sm grp-btn-cancel" onclick="cancelGroupEdit('notifications')" style="display:none;">Cancel</button>
+      </div>
+    </div>
+    <div class="settings-grid">
+      <div class="settings-row">
+        <label class="settings-label">Slack Webhook URL</label>
+        <div class="settings-secret-wrap">
+          <span class="settings-value" id="val-SLACK_WEBHOOK_URL">—</span>
+          <input class="settings-input" id="inp-SLACK_WEBHOOK_URL" type="password" placeholder="https://hooks.slack.com/..." style="display:none;" />
+          <button class="btn-eye" id="eye-SLACK_WEBHOOK_URL" onclick="toggleEye('SLACK_WEBHOOK_URL')" title="Show/hide value">&#128065;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Terraform Operations -->
+<div class="section">
+  <div class="section-title">Terraform Operations</div>
+  <div class="btn-group">
+    <button class="btn btn-outline" onclick="tfInit()">terraform init</button>
+    <button class="btn btn-outline" onclick="tfValidate()">terraform validate</button>
+    <button class="btn btn-outline" onclick="tfPlan()">terraform plan</button>
+    <button class="btn btn-primary" onclick="tfApply()" style="background:var(--green);">&#9654; terraform apply</button>
+    <button class="btn btn-danger" onclick="tfDestroy()">&#128465; terraform destroy</button>
+  </div>
+  <div class="log-box" id="tf-output">Run a terraform command above...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// All editable settings keys grouped by section
+const GROUP_KEYS = {
+  server: ['AGENT_WORKDIR', 'MCP_PORT', 'APPROVAL_MODE', 'DRIFT_CHECK_INTERVAL_MINUTES', 'COST_THRESHOLD'],
+  llm: ['LLM_PROVIDER', 'BEDROCK_MODEL_ID', 'BEDROCK_REGION', 'AWS_BEARER_TOKEN_BEDROCK'],
+  aws: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION', 'TF_STATE_BUCKET', 'TF_STATE_KEY', 'TF_STATE_REGION'],
+  github: ['GITHUB_REPO', 'GITHUB_PAT'],
+  notifications: ['SLACK_WEBHOOK_URL'],
+};
+const SETTINGS_KEYS = Object.values(GROUP_KEYS).flat();
+// Secrets are shown as masked and only sent if user actually types a new value
+const SECRET_KEYS = ['AWS_BEARER_TOKEN_BEDROCK', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'GITHUB_PAT', 'SLACK_WEBHOOK_URL'];
+const EYE_TOGGLE_KEYS = ['AWS_BEARER_TOKEN_BEDROCK', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'GITHUB_PAT', 'SLACK_WEBHOOK_URL'];
+let editingGroup = null; // which group is currently in edit mode
+let currentConfig = {};
+let awsRealValues = {}; // holds actual masked values from server for eye toggle
+
+document.addEventListener('DOMContentLoaded', () => { loadConfig(); checkAwsStatus(); checkBedrockStatus(); });
+
+async function loadConfig() {
+  try {
+    const data = await apiGet('/health');
+    if (data.ok) currentConfig.AGENT_WORKDIR = data.data.workdir;
+
+    const cfg = await apiGet('/ui/api/config');
+    if (cfg.ok) {
+      const d = cfg.data;
+      currentConfig = {
+        AGENT_WORKDIR: d.agent_workdir || '',
+        MCP_PORT: d.port,
+        APPROVAL_MODE: d.approval_mode,
+        DRIFT_CHECK_INTERVAL_MINUTES: d.interval_minutes,
+        COST_THRESHOLD: d.cost_threshold,
+        LLM_PROVIDER: d.llm_provider,
+        BEDROCK_MODEL_ID: d.bedrock_model_id,
+        BEDROCK_REGION: d.bedrock_region,
+
+        AWS_ACCESS_KEY_ID: d.aws_access_key_set ? '••••••••' : '',
+        AWS_SECRET_ACCESS_KEY: d.aws_secret_key_set ? '••••••••' : '',
+        AWS_SESSION_TOKEN: d.aws_session_token_set ? '••••••••' : '',
+        AWS_BEARER_TOKEN_BEDROCK: d.bedrock_token_set ? '••••••••' : '',
+        AWS_DEFAULT_REGION: d.aws_region,
+        TF_STATE_BUCKET: d.tf_state_bucket || '',
+        TF_STATE_KEY: d.tf_state_key || '',
+        TF_STATE_REGION: d.tf_state_region || 'us-east-1',
+        GITHUB_REPO: d.github_repo,
+        GITHUB_PAT: d.github_pat_set ? '••••••••' : '',
+        SLACK_WEBHOOK_URL: d.slack_webhook_set ? '••••••••' : '',
+      };
+      // Store actual masked values for eye toggle
+      awsRealValues = {
+        AWS_ACCESS_KEY_ID: d.aws_access_key_masked || '',
+        AWS_SECRET_ACCESS_KEY: d.aws_secret_key_masked || '',
+        AWS_SESSION_TOKEN: d.aws_session_token_masked || '',
+        AWS_BEARER_TOKEN_BEDROCK: d.bedrock_token_masked || '',
+      };
+      renderValues();
+    }
+  } catch(e) {
+    showAlert('settings-alert', 'Failed to load config: ' + e.message, 'error');
+  }
+}
+
+async function checkAwsStatus() {
+  const el = document.getElementById('aws-conn-status');
+  el.textContent = 'Checking...';
+  el.style.color = 'var(--muted)';
+  try {
+    const data = await apiGet('/ui/api/aws_status');
+    if (data.ok && data.data.authenticated) {
+      el.innerHTML = '<span style="color:var(--green);">&#10003; Connected</span> &mdash; '
+        + data.data.arn + ' (Account: ' + data.data.account + ')';
+    } else {
+      const err = data.data ? data.data.error : 'Unknown error';
+      el.innerHTML = '<span style="color:var(--red);">&#10007; Not connected</span> &mdash; ' + err;
+    }
+  } catch(e) {
+    el.innerHTML = '<span style="color:var(--red);">&#10007; Error:</span> ' + e.message;
+  }
+}
+
+async function checkBedrockStatus() {
+  const el = document.getElementById('bedrock-conn-status');
+  el.textContent = 'Checking...';
+  el.style.color = 'var(--muted)';
+  try {
+    const data = await apiGet('/ui/api/bedrock_status');
+    if (data.ok && data.data.ready) {
+      el.innerHTML = '<span style="color:var(--green);">&#10003; Ready</span> &mdash; '
+        + data.data.model + ' (' + data.data.region + ')';
+    } else {
+      const err = data.data ? data.data.error : 'Token not configured';
+      el.innerHTML = '<span style="color:var(--red);">&#10007; Not ready</span> &mdash; ' + err;
+    }
+  } catch(e) {
+    el.innerHTML = '<span style="color:var(--red);">&#10007; Error:</span> ' + e.message;
+  }
+}
+
+function renderValues() {
+  for (const key of SETTINGS_KEYS) {
+    const el = document.getElementById('val-' + key);
+    if (!el) continue;
+    const val = currentConfig[key];
+    if (SECRET_KEYS.includes(key)) {
+      el.textContent = val && val !== '' ? '••••••••  ✓ Configured' : '✗ Not set';
+      el.style.color = val && val !== '' ? 'var(--green)' : 'var(--text-secondary)';
+    } else {
+      el.textContent = val !== undefined && val !== '' ? val : '—';
+    }
+  }
+  // Reset eye buttons to hidden state
+  for (const key of EYE_TOGGLE_KEYS) {
+    const eyeBtn = document.getElementById('eye-' + key);
+    if (eyeBtn) eyeBtn.dataset.visible = 'false';
+  }
+}
+
+function toggleEye(key) {
+  const eyeBtn = document.getElementById('eye-' + key);
+  if (!eyeBtn) return;
+  const isVisible = eyeBtn.dataset.visible === 'true';
+
+  if (editingGroup) {
+    // In edit mode, toggle the input type between password and text
+    const inp = document.getElementById('inp-' + key);
+    if (inp) {
+      inp.type = isVisible ? 'password' : 'text';
+    }
+  } else {
+    // In view mode, toggle between masked and actual value
+    const valEl = document.getElementById('val-' + key);
+    if (!valEl) return;
+    const realVal = awsRealValues[key];
+    if (!realVal) return;
+    if (isVisible) {
+      valEl.textContent = '••••••••  ✓ Configured';
+      valEl.style.color = 'var(--green)';
+    } else {
+      valEl.textContent = realVal;
+      valEl.style.color = 'var(--text-primary)';
+    }
+  }
+
+  eyeBtn.dataset.visible = isVisible ? 'false' : 'true';
+  eyeBtn.innerHTML = isVisible ? '&#128065;' : '&#128064;';
+}
+
+function enterGroupEdit(group) {
+  editingGroup = group;
+  const grpEl = document.querySelector(`[data-group="${group}"]`);
+  grpEl.querySelector('.grp-btn-edit').style.display = 'none';
+  grpEl.querySelector('.grp-btn-save').style.display = '';
+  grpEl.querySelector('.grp-btn-cancel').style.display = '';
+
+  const keys = GROUP_KEYS[group] || [];
+  for (const key of keys) {
+    const valEl = document.getElementById('val-' + key);
+    const inpEl = document.getElementById('inp-' + key);
+    if (!valEl || !inpEl) continue;
+    valEl.style.display = 'none';
+    inpEl.style.display = '';
+    if (SECRET_KEYS.includes(key)) {
+      inpEl.value = '';
+      inpEl.type = 'password';
+      inpEl.placeholder = currentConfig[key] && currentConfig[key] !== '' ? 'Leave blank to keep current' : 'Enter value...';
+    } else if (inpEl.tagName === 'SELECT') {
+      inpEl.value = currentConfig[key] || '';
+    } else {
+      inpEl.value = currentConfig[key] !== undefined ? currentConfig[key] : '';
+    }
+  }
+  // Reset eye buttons in this group
+  for (const key of keys) {
+    if (EYE_TOGGLE_KEYS.includes(key)) {
+      const eyeBtn = document.getElementById('eye-' + key);
+      if (eyeBtn) { eyeBtn.dataset.visible = 'false'; eyeBtn.innerHTML = '&#128065;'; }
+    }
+  }
+}
+
+function cancelGroupEdit(group) {
+  editingGroup = null;
+  const grpEl = document.querySelector(`[data-group="${group}"]`);
+  grpEl.querySelector('.grp-btn-edit').style.display = '';
+  grpEl.querySelector('.grp-btn-save').style.display = 'none';
+  grpEl.querySelector('.grp-btn-cancel').style.display = 'none';
+
+  const keys = GROUP_KEYS[group] || [];
+  for (const key of keys) {
+    const valEl = document.getElementById('val-' + key);
+    const inpEl = document.getElementById('inp-' + key);
+    if (!valEl || !inpEl) continue;
+    valEl.style.display = '';
+    inpEl.style.display = 'none';
+  }
+  // Reset eye buttons
+  for (const key of keys) {
+    if (EYE_TOGGLE_KEYS.includes(key)) {
+      const eyeBtn = document.getElementById('eye-' + key);
+      if (eyeBtn) { eyeBtn.dataset.visible = 'false'; eyeBtn.innerHTML = '&#128065;'; }
+    }
+  }
+  renderValues();
+}
+
+async function saveGroup(group) {
+  const keys = GROUP_KEYS[group] || [];
+  const settings = {};
+  let changeCount = 0;
+
+  for (const key of keys) {
+    const inpEl = document.getElementById('inp-' + key);
+    if (!inpEl) continue;
+    const val = inpEl.value.trim();
+
+    if (SECRET_KEYS.includes(key)) {
+      if (val !== '') { settings[key] = val; changeCount++; }
+    } else {
+      if (val !== String(currentConfig[key] || '')) { settings[key] = val; changeCount++; }
+    }
+  }
+
+  if (changeCount === 0) {
+    showAlert('settings-alert', 'No changes detected', 'info');
+    cancelGroupEdit(group);
+    return;
+  }
+
+  showAlert('settings-alert', 'Saving ' + changeCount + ' setting(s)...', 'info');
+
+  try {
+    const data = await apiPost('/ui/api/save_settings', { settings });
+    if (data.ok) {
+      showAlert('settings-alert', 'Settings saved: ' + data.data.updated.join(', '), 'success');
+      cancelGroupEdit(group);
+      loadConfig();
+      // Refresh status indicators if relevant
+      if (group === 'aws') checkAwsStatus();
+      if (group === 'llm') checkBedrockStatus();
+    } else {
+      showAlert('settings-alert', 'Error: ' + data.error, 'error');
+    }
+  } catch(e) {
+    showAlert('settings-alert', 'Failed to save: ' + e.message, 'error');
+  }
+}
+
+async function startScheduler() {
+  showAlert('settings-alert', 'Starting scheduler...', 'info');
+  try {
+    const data = await apiPost('/scheduler/start', {});
+    if (data.ok) {
+      document.getElementById('sched-status').className = 'badge badge-green';
+      document.getElementById('sched-status').textContent = data.data.status;
+      showAlert('settings-alert', 'Scheduler started (every ' + data.data.interval_minutes + ' min)', 'success');
+    }
+  } catch(e) {
+    showAlert('settings-alert', 'Failed: ' + e.message, 'error');
+  }
+}
+
+async function stopScheduler() {
+  try {
+    const data = await apiPost('/scheduler/stop', {});
+    if (data.ok) {
+      document.getElementById('sched-status').className = 'badge badge-red';
+      document.getElementById('sched-status').textContent = data.data.status;
+      showAlert('settings-alert', 'Scheduler stopped', 'success');
+    }
+  } catch(e) {
+    showAlert('settings-alert', 'Failed: ' + e.message, 'error');
+  }
+}
+
+async function tfInit() { await runTf('/terraform_init', 'terraform init'); }
+async function tfValidate() { await runTf('/terraform_validate', 'terraform validate'); }
+async function tfPlan() { await runTf('/terraform_plan', 'terraform plan'); }
+
+async function tfApply() {
+  if (!confirm('⚠️ This will CREATE / MODIFY real AWS resources and may incur costs.\n\nAre you sure you want to run terraform apply?')) return;
+  const output = document.getElementById('tf-output');
+  output.textContent = 'Running terraform plan first...\n';
+  try {
+    const planData = await apiPost('/terraform_plan', {});
+    if (!planData.ok) { output.textContent += 'Plan failed: ' + planData.error; return; }
+    output.textContent += (planData.data.stdout || '') + '\n\n--- Applying ---\n\n';
+    const data = await apiPost('/terraform_apply', {});
+    if (data.ok) { output.textContent += (data.data.stdout || '') + '\n' + (data.data.stderr || ''); }
+    else { output.textContent += 'Error: ' + data.error; }
+  } catch(e) { output.textContent += 'Error: ' + e.message; }
+}
+
+async function tfDestroy() {
+  if (!confirm('🔴 DANGER: This will DESTROY all managed infrastructure.\n\nAre you sure you want to run terraform destroy?')) return;
+  const output = document.getElementById('tf-output');
+  output.textContent = 'Running terraform destroy...\n';
+  try {
+    const data = await apiPost('/terraform_destroy', {});
+    if (data.ok) { output.textContent += (data.data.stdout || '') + '\n' + (data.data.stderr || ''); }
+    else { output.textContent += 'Error: ' + data.error; }
+  } catch(e) { output.textContent += 'Error: ' + e.message; }
+}
+
+async function runTf(endpoint, label) {
+  const output = document.getElementById('tf-output');
+  output.textContent = 'Running ' + label + '...\n';
+  try {
+    const data = await apiPost(endpoint, {});
+    if (data.ok) {
+      const d = data.data;
+      output.textContent += (d.stdout || '') + '\n' + (d.stderr || '');
+      if (d.result) output.textContent += JSON.stringify(d.result, null, 2);
+    } else { output.textContent += 'Error: ' + data.error; }
+  } catch(e) { output.textContent += 'Error: ' + e.message; }
+}
+</script>
+{% endblock %}

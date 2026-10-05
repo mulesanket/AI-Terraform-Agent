@@ -1,0 +1,48 @@
+# Terraform
+.terraform/
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+plan.out
+*.tfplan
+plan.json
+.terraform.lock.hcl
+
+# Python
+.venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# User database
+agent_users.db
+*.db
+*.db-shm
+*.db-wal
+drift_audit.json
+
+# Archives
+*.zip
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vendored/bundled tools - install on the target host instead
+aws/dist/
+
+# Runtime/generated Terraform workspaces
+workspace/*
+!workspace/.gitkeep

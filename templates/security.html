@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+{% block title %}Security, Cost & Governance{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Security, Cost & Governance</h2>
+  <p>Run security scans, cost estimates, and AI-powered infrastructure governance reviews</p>
+</div>
+
+<div class="btn-group" style="gap:10px; flex-wrap:wrap;">
+  <button class="btn btn-primary" onclick="runCheckovScan()" id="btn-checkov">&#128274; Run Checkov Security Scan</button>
+  <button class="btn btn-outline" onclick="runInfracostScan()" id="btn-infracost">&#128176; Run Cost Estimate</button>
+</div>
+
+<div id="scan-alert" class="alert"></div>
+
+<!-- ── Checkov Results ── -->
+<div class="section" id="checkov-section" style="display:none;">
+  <div class="section-title">&#128274; Checkov Security Scan</div>
+
+  <!-- Summary Cards -->
+  <div class="card-grid" style="grid-template-columns:repeat(4,1fr); margin-bottom:16px;">
+    <div class="card" style="border-left:3px solid var(--green);">
+      <div class="card-label">Passed</div>
+      <div class="card-value" id="ck-passed" style="color:var(--green);">—</div>
+    </div>
+    <div class="card" style="border-left:3px solid var(--red);">
+      <div class="card-label">Failed</div>
+      <div class="card-value" id="ck-failed" style="color:var(--red);">—</div>
+    </div>
+    <div class="card" style="border-left:3px solid var(--text-secondary);">
+      <div class="card-label">Skipped</div>
+      <div class="card-value" id="ck-skipped" style="color:var(--text-secondary);">—</div>
+    </div>
+    <div class="card" style="border-left:3px solid var(--accent);">
+      <div class="card-label">Score</div>
+      <div class="card-value" id="ck-score" style="color:var(--accent);">—</div>
+    </div>
+  </div>
+
+  <!-- Severity Breakdown -->
+  <div id="ck-severity-bar" style="display:none; margin-bottom:16px;">
+    <div style="display:flex; height:8px; border-radius:4px; overflow:hidden; background:var(--bg-hover);">
+      <div id="ck-bar-critical" style="background:var(--red); height:100%;"></div>
+      <div id="ck-bar-high" style="background:#f97316; height:100%;"></div>
+      <div id="ck-bar-medium" style="background:var(--yellow); height:100%;"></div>
+      <div id="ck-bar-low" style="background:var(--accent); height:100%;"></div>
+      <div id="ck-bar-pass" style="background:var(--green); height:100%;"></div>
+    </div>
+    <div style="display:flex; gap:16px; margin-top:6px; font-size:12px; color:var(--text-secondary);" id="ck-severity-legend"></div>
+  </div>
+
+  <!-- Failed Checks Table -->
+  <div class="table-wrap" id="ck-findings-wrap" style="display:none;">
+    <h3 style="margin:0 0 8px;">Failed Checks <span id="ck-fail-count" class="badge badge-red"></span></h3>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:120px;">Check ID</th>
+          <th>Check Name</th>
+          <th>Resource</th>
+          <th style="width:80px;">Severity</th>
+          <th style="width:130px;">Guideline</th>
+        </tr>
+      </thead>
+      <tbody id="ck-findings-body"></tbody>
+    </table>
+  </div>
+
+  <!-- Passed Checks (collapsed) -->
+  <div id="ck-passed-wrap" style="display:none; margin-top:12px;">
+    <div style="cursor:pointer; font-size:13px; font-weight:600; color:var(--accent);" onclick="toggleElement('ck-passed-table')">
+      &#9654; Show Passed Checks <span id="ck-pass-count" class="badge badge-green"></span>
+    </div>
+    <div id="ck-passed-table" style="display:none; margin-top:8px;">
+      <table class="table-wrap">
+        <thead><tr><th>Check ID</th><th>Check Name</th><th>Resource</th></tr></thead>
+        <tbody id="ck-passed-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ── Cost Estimate Results ── -->
+<div class="section" id="infracost-section" style="display:none;">
+  <div class="section-title">&#128176; Cost Estimate (AWS Pricing API)</div>
+
+  <!-- Cost Summary Cards -->
+  <div class="card-grid" style="grid-template-columns:repeat(3,1fr); margin-bottom:16px;">
+    <div class="card" style="border-left:3px solid var(--accent);">
+      <div class="card-label">Monthly Estimate</div>
+      <div class="card-value" id="ic-monthly" style="color:var(--accent);font-size:28px;">—</div>
+    </div>
+    <div class="card" style="border-left:3px solid var(--text-secondary);">
+      <div class="card-label">Resources Detected</div>
+      <div class="card-value" id="ic-resources">—</div>
+    </div>
+    <div class="card" style="border-left:3px solid var(--yellow);">
+      <div class="card-label">Region</div>
+      <div class="card-value" id="ic-region" style="font-size:16px;">—</div>
+    </div>
+  </div>
+
+  <!-- Cost Breakdown Table -->
+  <div class="table-wrap" id="ic-breakdown-wrap" style="display:none;">
+    <h3 style="margin:0 0 8px;">Resource Cost Breakdown</h3>
+    <table>
+      <thead><tr><th>Resource</th><th>Type</th><th>Details</th><th style="text-align:right;">Monthly Cost</th></tr></thead>
+      <tbody id="ic-breakdown-body"></tbody>
+    </table>
+    <div style="text-align:right; padding:8px 16px; font-weight:700; font-size:14px; border-top:2px solid var(--border);">
+      Total: <span id="ic-total-footer" style="color:var(--accent);"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Raw Output (collapsed) ── -->
+<div class="section">
+  <div class="section-title" style="cursor:pointer;" onclick="toggleElement('scan-output-wrap')">
+    &#128203; Raw Scan Output <span style="font-size:12px;">&#9654;</span>
+  </div>
+  <div id="scan-output-wrap" style="display:none;">
+    <div class="log-box" id="scan-output" style="max-height:400px; overflow-y:auto;">Run a scan to see output...</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleElement(id) {
+  const el = document.getElementById(id);
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function severityBadge(sev) {
+  const s = (sev || 'UNKNOWN').toUpperCase();
+  if (s === 'CRITICAL') return '<span class="badge badge-red">Critical</span>';
+  if (s === 'HIGH') return '<span class="badge badge-red" style="opacity:0.8">High</span>';
+  if (s === 'MEDIUM') return '<span class="badge badge-yellow">Medium</span>';
+  if (s === 'LOW') return '<span class="badge badge-blue">Low</span>';
+  return '<span class="badge">' + escapeHtml(s) + '</span>';
+}
+
+/* ────────── Checkov ────────── */
+
+async function runCheckovScan() {
+  const btn = document.getElementById('btn-checkov');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Scanning...';
+  showAlert('scan-alert', 'Running Checkov security scan against your Terraform code...', 'info');
+  document.getElementById('checkov-section').style.display = 'none';
+
+  try {
+    const data = await apiPost('/run_checkov', {});
+    if (!data.ok) throw new Error(data.error);
+    const d = data.data;
+
+    // Handle not-installed
+    if (d.install_required) {
+      showAlert('scan-alert', 'Checkov is not installed. Run: pip install checkov', 'error');
+      document.getElementById('scan-output').textContent = d.stderr || d.message || '';
+      document.getElementById('scan-output-wrap').style.display = 'block';
+      return;
+    }
+
+    // Show raw output
+    document.getElementById('scan-output').textContent = d.stdout || d.stderr || 'No output';
+
+    if (d.parsed) {
+      renderCheckovResults(d.parsed);
+      document.getElementById('checkov-section').style.display = 'block';
+    } else if (d.rc === 0) {
+      showAlert('scan-alert', 'Checkov completed but returned no structured results.', 'success');
+    } else {
+      showAlert('scan-alert', 'Checkov finished with exit code ' + d.rc + '. Check raw output for details.', 'error');
+      document.getElementById('scan-output-wrap').style.display = 'block';
+    }
+
+  } catch (e) {
+    showAlert('scan-alert', 'Checkov scan failed: ' + e.message, 'error');
+    document.getElementById('scan-output').textContent = 'Error: ' + e.message;
+    document.getElementById('scan-output-wrap').style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '&#128274; Run Checkov Security Scan';
+  }
+}
+
+function renderCheckovResults(parsed) {
+  let passed = 0, failed = 0, skipped = 0;
+  let failedChecks = [], passedChecks = [];
+  const sevCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+
+  const results = Array.isArray(parsed) ? parsed : [parsed];
+  results.forEach(r => {
+    const summary = r.summary || {};
+    passed += summary.passed || 0;
+    failed += summary.failed || 0;
+    skipped += summary.skipped || 0;
+    if (r.results) {
+      if (r.results.failed_checks) failedChecks.push(...r.results.failed_checks);
+      if (r.results.passed_checks) passedChecks.push(...r.results.passed_checks);
+    }
+  });
+
+  // Count severities
+  failedChecks.forEach(c => {
+    const sev = (c.severity || 'UNKNOWN').toUpperCase();
+    if (sevCounts[sev] !== undefined) sevCounts[sev]++;
+  });
+
+  const total = passed + failed + skipped;
+  const score = total > 0 ? Math.round((passed / total) * 100) : 0;
+
+  document.getElementById('ck-passed').textContent = passed;
+  document.getElementById('ck-failed').textContent = failed;
+  document.getElementById('ck-skipped').textContent = skipped;
+  document.getElementById('ck-score').textContent = score + '%';
+
+  // Severity bar
+  if (total > 0) {
+    const bar = document.getElementById('ck-severity-bar');
+    bar.style.display = 'block';
+    const pct = v => (v / total * 100).toFixed(1) + '%';
+    document.getElementById('ck-bar-critical').style.width = pct(sevCounts.CRITICAL);
+    document.getElementById('ck-bar-high').style.width = pct(sevCounts.HIGH);
+    document.getElementById('ck-bar-medium').style.width = pct(sevCounts.MEDIUM);
+    document.getElementById('ck-bar-low').style.width = pct(sevCounts.LOW);
+    document.getElementById('ck-bar-pass').style.width = pct(passed);
+    const legend = document.getElementById('ck-severity-legend');
+    let legendHtml = '';
+    if (sevCounts.CRITICAL > 0) legendHtml += `<span style="color:var(--red);">&#9679; ${sevCounts.CRITICAL} Critical</span>`;
+    if (sevCounts.HIGH > 0) legendHtml += `<span style="color:#f97316;">&#9679; ${sevCounts.HIGH} High</span>`;
+    if (sevCounts.MEDIUM > 0) legendHtml += `<span style="color:var(--yellow);">&#9679; ${sevCounts.MEDIUM} Medium</span>`;
+    if (sevCounts.LOW > 0) legendHtml += `<span style="color:var(--accent);">&#9679; ${sevCounts.LOW} Low</span>`;
+    legendHtml += `<span style="color:var(--green);">&#9679; ${passed} Passed</span>`;
+    legend.innerHTML = legendHtml;
+  }
+
+  // Failed checks table
+  if (failedChecks.length > 0) {
+    document.getElementById('ck-fail-count').textContent = failedChecks.length;
+    const tbody = document.getElementById('ck-findings-body');
+    tbody.innerHTML = '';
+    failedChecks.forEach(c => {
+      const guide = c.guideline ? `<a href="${escapeHtml(c.guideline)}" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none;">View Fix &#8599;</a>` : '—';
+      tbody.innerHTML += `<tr>
+        <td><span class="badge badge-red">${escapeHtml(c.check_id || '—')}</span></td>
+        <td style="font-size:13px;">${escapeHtml(c.check_name || c.name || '—')}</td>
+        <td><code style="font-size:12px;">${escapeHtml(c.resource || '—')}</code></td>
+        <td>${severityBadge(c.severity)}</td>
+        <td>${guide}</td>
+      </tr>`;
+    });
+    document.getElementById('ck-findings-wrap').style.display = 'block';
+  }
+
+  // Passed checks (collapsed)
+  if (passedChecks.length > 0) {
+    document.getElementById('ck-pass-count').textContent = passedChecks.length;
+    const ptbody = document.getElementById('ck-passed-body');
+    ptbody.innerHTML = '';
+    passedChecks.forEach(c => {
+      ptbody.innerHTML += `<tr>
+        <td><span class="badge badge-green">${escapeHtml(c.check_id || '—')}</span></td>
+        <td style="font-size:13px;">${escapeHtml(c.check_name || c.name || '—')}</td>
+        <td><code style="font-size:12px;">${escapeHtml(c.resource || '—')}</code></td>
+      </tr>`;
+    });
+    document.getElementById('ck-passed-wrap').style.display = 'block';
+  }
+
+  const alertType = failed > 0 ? 'error' : 'success';
+  const alertMsg = failed > 0
+    ? `Checkov found ${failed} security issue${failed > 1 ? 's' : ''} across your Terraform code. Review the findings below.`
+    : `Checkov passed! All ${passed} checks passed — no security issues found.`;
+  showAlert('scan-alert', alertMsg, alertType);
+}
+
+/* ────────── Cost Estimate ────────── */
+
+async function runCostEstimate() {
+  const btn = document.getElementById('btn-infracost');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Estimating...';
+  showAlert('scan-alert', 'Running cost estimation using AWS Pricing API...', 'info');
+  document.getElementById('infracost-section').style.display = 'none';
+
+  try {
+    const data = await apiPost('/cost_estimate', {});
+    if (!data.ok) throw new Error(data.error);
+    const d = data.data;
+
+    // Check for errors (no plan.out, etc.)
+    if (d.error) {
+      showAlert('scan-alert', 'Cost estimation error: ' + d.error, 'error');
+      return;
+    }
+
+    renderCostResults(d);
+    document.getElementById('infracost-section').style.display = 'block';
+
+  } catch (e) {
+    showAlert('scan-alert', 'Cost estimation failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '&#128176; Run Cost Estimate';
+  }
+}
+
+function renderCostResults(estimate) {
+  const totalMonthly = parseFloat(estimate.total_monthly || 0);
+  document.getElementById('ic-monthly').textContent = '$' + totalMonthly.toFixed(2) + '/mo';
+  document.getElementById('ic-resources').textContent = estimate.resource_count || (estimate.resources || []).length;
+  document.getElementById('ic-region').textContent = estimate.region || 'us-east-1';
+
+  const resources = estimate.resources || [];
+
+  if (resources.length > 0) {
+    // Sort by cost descending
+    resources.sort((a, b) => (b.monthly || 0) - (a.monthly || 0));
+    const tbody = document.getElementById('ic-breakdown-body');
+    tbody.innerHTML = '';
+    resources.forEach(r => {
+      const cost = parseFloat(r.monthly || 0);
+      const costStr = cost > 0 ? '$' + cost.toFixed(2) : '<span style="color:var(--green);">Free</span>';
+      const note = r.note ? ' <span style="font-size:11px; color:var(--text-secondary);">(' + escapeHtml(r.note) + ')</span>' : '';
+      tbody.innerHTML += `<tr>
+        <td><strong>${escapeHtml(r.address || '—')}</strong>${note}</td>
+        <td style="font-family:monospace; font-size:12px; color:var(--text-secondary);">${escapeHtml(r.resource_type || r.type || '—')}</td>
+        <td style="text-align:right; font-weight:600;">${costStr}</td>
+      </tr>`;
+    });
+    document.getElementById('ic-total-footer').textContent = '$' + totalMonthly.toFixed(2) + '/mo';
+    document.getElementById('ic-breakdown-wrap').style.display = 'block';
+  }
+
+  const alertType = totalMonthly > 0 ? 'success' : 'info';
+  const msg = totalMonthly > 0
+    ? `Estimated cost: $${totalMonthly.toFixed(2)}/month across ${resources.length} resource${resources.length !== 1 ? 's' : ''}.`
+    : `No cost-bearing resources detected (free tier or usage-based pricing).`;
+  showAlert('scan-alert', msg, alertType);
+}
+</script>
+{% endblock %}

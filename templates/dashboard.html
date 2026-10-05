@@ -1,0 +1,469 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Dashboard</h2>
+  <p>Real-time overview of your infrastructure, agent status, and deployed resources</p>
+</div>
+
+<!-- Top Status Row -->
+<div class="card-grid dash-status-row">
+  <div class="card dash-card {% if agent_online %}dash-card-ok{% else %}dash-card-err{% endif %}" id="card-agent">
+    <div class="dash-card-icon">&#9881;</div>
+    <a href="/ui/settings" class="dash-card-content" style="text-decoration: none; color: inherit;">
+      <div class="dash-card-content">
+        <div class="card-label">Agent Status</div>
+        <div class="card-value" id="agent-status">{% if agent_online %}<span class="badge badge-green">Online</span>{% else %}<span class="badge badge-red">Offline</span>{% endif %}</div>
+        <div class="card-sub" id="agent-workdir"></div>
+      </div>
+    </a>
+  </div>
+    <div class="card dash-card" id="card-aws">
+      <div class="dash-card-icon">&#9729;</div>
+      <a href="/ui/settings" class="dash-card-content" style="text-decoration: none; color: inherit;">
+        <div class="dash-card-content">
+          <div class="card-label">AWS Connection</div>
+          <div class="card-value" id="aws-status"><span class="spinner"></span></div>
+          <div class="card-sub" id="aws-detail">Checking...</div>
+        </div>
+      </a>
+    </div>
+    <div class="card dash-card" id="card-resources">
+      <div class="dash-card-icon">&#9646;</div>
+      <div class="dash-card-content">
+        <div class="card-label">Managed Resources</div>
+        <div class="card-value" id="resource-count">—</div>
+        <div class="card-sub" id="resource-detail">No state loaded</div>
+      </div>
+    </div>
+    <div class="card dash-card" id="card-github">
+      <div class="dash-card-icon">&#128025;</div>
+      <div class="dash-card-content">
+        <div class="card-label">GitHub Repo</div>
+        <div class="card-value" id="github-status">—</div>
+        <div class="card-sub" id="github-detail">Not configured</div>
+      </div>
+    </div>
+</div>
+
+<!-- Config Badges Row -->
+<div class="section">
+  <div class="dash-badges" id="config-badges">
+    <span class="dash-badge" id="badge-llm">LLM: —</span>
+    <span class="dash-badge" id="badge-approval">Approval: —</span>
+    <span class="dash-badge" id="badge-profile">Profile: —</span>
+    <span class="dash-badge" id="badge-model">Model: —</span>
+  </div>
+</div>
+
+<!-- Two-Column Layout: Resources + Quick Actions -->
+<div class="dash-cols">
+  <!-- Left: Live Resource Inventory -->
+  <div class="dash-col-main">
+    <div class="section">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+        <div class="section-title" style="margin-bottom:0;">&#9646; Live Resource Inventory</div>
+        <button class="btn btn-outline" onclick="syncWithAws()" id="btn-sync-aws" style="font-size:12px; padding:5px 12px;" title="Runs terraform refresh to sync state with actual AWS, then reloads">
+          &#8635; Sync with AWS
+        </button>
+      </div>
+      <div id="sync-alert" class="alert" style="margin-bottom:8px;"></div>
+      <div class="table-wrap" id="resource-table-wrap">
+        <table id="resource-table">
+          <thead>
+            <tr>
+              <th>Resource</th>
+              <th>Type</th>
+              <th>Details</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="resource-tbody">
+            <tr><td colspan="4" style="color:var(--text-secondary);text-align:center;padding:24px;">Loading resource inventory...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Terraform Files -->
+    <div class="section">
+      <div class="section-title">&#128196; Terraform Files</div>
+      <div class="dash-file-grid" id="tf-files-grid">
+        <div style="color:var(--text-secondary);font-size:13px;">Scanning...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Quick Actions + Activity -->
+  <div class="dash-col-side">
+    <!-- Quick Actions -->
+    <div class="section">
+      <div class="section-title">&#9889; Quick Actions</div>
+      <div class="dash-actions">
+        <button class="btn btn-primary dash-action-btn" onclick="runDriftCheck()" id="btn-drift">
+          <span class="dash-action-icon">&#8635;</span>
+          <span>Check for Drift</span>
+        </button>
+        <button class="btn btn-outline dash-action-btn" onclick="runHeal()" id="btn-heal">
+          <span class="dash-action-icon">&#9889;</span>
+          <span>Run Healing Pipeline</span>
+        </button>
+        <button class="btn btn-outline dash-action-btn" onclick="runCheckov()" id="btn-checkov">
+          <span class="dash-action-icon">&#128274;</span>
+          <span>Security Scan</span>
+        </button>
+        <button class="btn btn-outline dash-action-btn" onclick="refreshDashboard()">
+          <span class="dash-action-icon">&#128260;</span>
+          <span>Refresh Dashboard</span>
+        </button>
+      </div>
+      <div id="action-alert" class="alert" style="margin-top:12px;"></div>
+    </div>
+
+    <!-- Live Drift Status -->
+    <div class="section">
+      <div class="section-title">&#128203; Drift Status</div>
+      <div class="card dash-drift-card" id="drift-status-card">
+        <div class="dash-drift-indicator" id="drift-indicator">
+          <span class="dash-drift-icon" id="drift-icon">?</span>
+          <span id="drift-text">Not checked yet</span>
+        </div>
+        <div class="card-sub" id="drift-detail">Run a drift check to see current state</div>
+      </div>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="section">
+      <div class="section-title">&#128203; Activity Log</div>
+      <div class="log-box" id="activity-log" style="max-height:250px;">Waiting for activity...</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  refreshDashboard();
+});
+
+async function refreshDashboard() {
+  logAppend('Refreshing dashboard...', 'info');
+  try {
+    const resp = await apiGet('/ui/api/dashboard_summary');
+    if (!resp.ok) { logAppend('Failed to load summary', 'error'); return; }
+    const d = resp.data;
+    renderStatusCards(d);
+    try {
+      renderConfigBadges(d);
+      renderResourceTable(d);
+      renderTfFiles(d);
+    } catch (inner) {
+      console.warn('Dashboard render warning:', inner);
+    }
+    logAppend('Dashboard refreshed', 'success');
+  } catch (e) {
+    console.error('Dashboard load error:', e);
+    logAppend('Dashboard load failed: ' + e.message, 'error');
+  }
+}
+
+function renderStatusCards(d) {
+
+  // AWS
+  const awsEl = document.getElementById('aws-status');
+  const awsDet = document.getElementById('aws-detail');
+  const awsCard = document.getElementById('card-aws');
+  if (d.aws.status === 'authenticated') {
+    awsEl.innerHTML = '<span class="badge badge-green">Connected</span>';
+    const arnParts = (d.aws.arn || '').split('/');
+    awsDet.textContent = 'Account ' + d.aws.account + ' · ' + (arnParts[arnParts.length - 1] || '');
+    awsCard.classList.add('dash-card-ok');
+  } else {
+    awsEl.innerHTML = '<span class="badge badge-red">Not Connected</span>';
+    awsDet.textContent = 'Configure AWS in Settings';
+    awsCard.classList.add('dash-card-err');
+  }
+
+  // Resources
+  const tf = d.terraform;
+  const resEl = document.getElementById('resource-count');
+  const resDet = document.getElementById('resource-detail');
+  const resCard = document.getElementById('card-resources');
+  if (tf.state_exists) {
+    resEl.textContent = tf.resource_count;
+    const parts = [];
+    if (tf.resource_count > 0) parts.push(tf.resource_count + ' managed');
+    if (tf.data_source_count > 0) parts.push(tf.data_source_count + ' data sources');
+    resDet.textContent = parts.join(' · ') || 'Empty state';
+    resCard.classList.add(tf.resource_count > 0 ? 'dash-card-ok' : '');
+  } else {
+    resEl.textContent = '0';
+    resDet.textContent = 'No terraform state found';
+  }
+
+  // GitHub
+  const ghEl = document.getElementById('github-status');
+  const ghDet = document.getElementById('github-detail');
+  if (d.github.configured) {
+    ghEl.innerHTML = '<span class="badge badge-green">Linked</span>';
+    ghDet.textContent = d.github.repo;
+  } else {
+    ghEl.innerHTML = '<span class="badge badge-yellow">Not Set</span>';
+    ghDet.textContent = 'Configure in Settings';
+  }
+}
+
+function renderConfigBadges(d) {
+  const c = d.config;
+  document.getElementById('badge-llm').textContent = 'LLM: ' + (c.llm_provider || 'none');
+  document.getElementById('badge-approval').textContent = 'Approval: ' + (c.approval_mode || 'pr');
+  document.getElementById('badge-profile').textContent = 'AWS: ' + (d.aws.status === 'authenticated' ? 'Connected' : 'Not Connected');
+  document.getElementById('badge-model').textContent = 'Model: ' + (c.bedrock_model || 'not set').split(':')[0];
+}
+
+function renderResourceTable(d) {
+  const tbody = document.getElementById('resource-tbody');
+  const resources = (d.terraform.resources || []).filter(r => r.mode === 'managed');
+  if (resources.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-secondary);text-align:center;padding:32px;">No managed resources in state. Use <strong>Generate Infra</strong> to deploy resources.</td></tr>';
+    return;
+  }
+  let html = '';
+  for (const r of resources) {
+    const icon = getResourceIcon(r.type);
+    const detail = getResourceDetail(r);
+    const statusBadge = getResourceStatus(r);
+    const isDead = (r.state === 'terminated' || r.state === 'not_found' || r.state === 'deleted');
+    const rowStyle = isDead ? ' style="opacity:0.5; background:rgba(239,68,68,0.05);"' : '';
+    html += `<tr${rowStyle}>
+      <td><span class="dash-res-name">${icon} ${r.name}</span></td>
+      <td><code class="dash-res-type">${r.type}</code></td>
+      <td class="dash-res-detail">${detail}</td>
+      <td>${statusBadge}</td>
+    </tr>`;
+  }
+  tbody.innerHTML = html;
+}
+
+function getResourceIcon(type) {
+  const icons = {
+    'aws_instance': '&#128187;',
+    'aws_s3_bucket': '&#128230;',
+    'aws_key_pair': '&#128273;',
+    'aws_lambda_function': '&#955;',
+    'aws_kms_key': '&#128274;',
+    'tls_private_key': '&#128272;',
+    'random_id': '&#127922;',
+  };
+  return icons[type] || '&#9632;';
+}
+
+function getResourceDetail(r) {
+  if (r.type === 'aws_instance') {
+    const parts = [];
+    if (r.instance_id) parts.push('<span class="dash-detail-label">ID:</span> ' + r.instance_id);
+    if (r.instance_type) parts.push('<span class="dash-detail-label">Type:</span> ' + r.instance_type);
+    if (r.public_ip) parts.push('<span class="dash-detail-label">IP:</span> ' + r.public_ip);
+    if (r.tags && Object.keys(r.tags).length > 0) {
+      const tagStr = Object.entries(r.tags).map(([k,v]) => k+'='+v).join(', ');
+      parts.push('<span class="dash-detail-label">Tags:</span> ' + tagStr);
+    }
+    return parts.join('<br>') || '—';
+  }
+  if (r.type === 'aws_s3_bucket') {
+    return (r.bucket ? '<span class="dash-detail-label">Bucket:</span> ' + r.bucket : '') +
+           (r.region ? ' <span class="dash-detail-label">Region:</span> ' + r.region : '');
+  }
+  if (r.type === 'aws_key_pair') {
+    return (r.key_name ? '<span class="dash-detail-label">Name:</span> ' + r.key_name : '') +
+           (r.fingerprint ? '<br><span class="dash-detail-label">FP:</span> ' + r.fingerprint.substring(0, 20) + '...' : '');
+  }
+  if (r.type === 'aws_lambda_function') {
+    return (r.function_name ? '<span class="dash-detail-label">Function:</span> ' + r.function_name : '') +
+           (r.runtime ? ' · ' + r.runtime : '');
+  }
+  return '—';
+}
+
+function getResourceStatus(r) {
+  const verified = r.live_verified ? ' &#10003;' : '';
+  const verifiedTip = r.live_verified ? ' title="Verified against live AWS"' : ' title="From Terraform state (not live-checked)"';
+  if (r.type === 'aws_instance') {
+    if (r.state === 'running') return '<span class="badge badge-green"' + verifiedTip + '>Running' + verified + '</span>';
+    if (r.state === 'stopped') return '<span class="badge badge-yellow"' + verifiedTip + '>Stopped' + verified + '</span>';
+    if (r.state === 'terminated' || r.state === 'not_found') return '<span class="badge badge-red"' + verifiedTip + '>Terminated' + verified + '</span>';
+    if (r.state === 'shutting-down') return '<span class="badge badge-red"' + verifiedTip + '>Shutting Down' + verified + '</span>';
+    if (r.state === 'pending') return '<span class="badge badge-yellow"' + verifiedTip + '>Pending' + verified + '</span>';
+    return '<span class="badge badge-blue"' + verifiedTip + '>' + (r.state || 'Unknown') + '</span>';
+  }
+  if (r.type === 'aws_s3_bucket') {
+    if (r.state === 'deleted') return '<span class="badge badge-red"' + verifiedTip + '>Deleted' + verified + '</span>';
+    if (r.state === 'active') return '<span class="badge badge-green"' + verifiedTip + '>Active' + verified + '</span>';
+  }
+  return '<span class="badge badge-green">Active</span>';
+}
+
+function renderTfFiles(d) {
+  const grid = document.getElementById('tf-files-grid');
+  const workFiles = d.workdir_files || [];
+  const genFiles = (d.generated || {}).files || [];
+  if (workFiles.length === 0 && genFiles.length === 0) {
+    grid.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;padding:12px;">No .tf files found in workspace.</div>';
+    return;
+  }
+  let html = '';
+  for (const f of workFiles) {
+    html += `<div class="dash-file-chip"><span class="dash-file-icon">&#128196;</span> ${f.name} <span class="dash-file-size">${formatBytes(f.size)}</span></div>`;
+  }
+  if (genFiles.length > 0) {
+    html += '<div class="dash-file-sep">.generated/</div>';
+    for (const f of genFiles) {
+      html += `<div class="dash-file-chip dash-file-gen"><span class="dash-file-icon">&#10024;</span> ${f.name} <span class="dash-file-size">${formatBytes(f.size)}</span></div>`;
+    }
+  }
+  grid.innerHTML = html;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  return (bytes / 1024).toFixed(1) + ' KB';
+}
+
+/* --- Quick Actions --- */
+
+async function runDriftCheck() {
+  const btn = document.getElementById('btn-drift');
+  btn.disabled = true;
+  showAlert('action-alert', 'Comparing live infrastructure against Terraform config...', 'info');
+  logAppend('Scanning for infrastructure drift...');
+  try {
+    const data = await apiPost('/github/drift_diff', {});
+    if (data.ok) {
+      const result = data.data;
+      const card = document.getElementById('drift-status-card');
+      const icon = document.getElementById('drift-icon');
+      const text = document.getElementById('drift-text');
+      const detail = document.getElementById('drift-detail');
+      if (!result.has_drift) {
+        icon.textContent = '✓'; icon.className = 'dash-drift-icon drift-ok';
+        text.textContent = 'In Sync'; card.className = 'card dash-drift-card drift-card-ok';
+        detail.textContent = 'Live AWS infrastructure matches your Terraform configuration. No manual changes detected.';
+        logAppend('[OK] No drift — infrastructure is in sync with Terraform.', 'success');
+        showAlert('action-alert', 'No drift detected — infrastructure is in sync.', 'success');
+      } else {
+        const count = (result.resources || []).length;
+        const updates = result.resources.filter(r => r.actions.includes('update')).length;
+        const deletes = result.resources.filter(r => r.actions.includes('delete')).length;
+        icon.textContent = '!'; icon.className = 'dash-drift-icon drift-warn';
+        text.textContent = count + ' Resource' + (count > 1 ? 's' : '') + ' Drifted';
+        card.className = 'card dash-drift-card drift-card-warn';
+        let parts = [];
+        if (updates > 0) parts.push(updates + ' modified outside Terraform');
+        if (deletes > 0) parts.push(deletes + ' will be replaced/destroyed');
+        detail.textContent = parts.join(', ') + '. Go to Drift Detection for details & remediation.';
+        logAppend('[DRIFT] ' + count + ' resource(s) drifted. Review Drift Detection page.', 'warn');
+        showAlert('action-alert', count + ' resource(s) drifted — review Drift Detection page.', 'error');
+      }
+    }
+  } catch (e) {
+    const icon = document.getElementById('drift-icon');
+    const text = document.getElementById('drift-text');
+    const detail = document.getElementById('drift-detail');
+    const card = document.getElementById('drift-status-card');
+    icon.textContent = '✗'; icon.className = 'dash-drift-icon drift-err';
+    text.textContent = 'Scan Failed'; card.className = 'card dash-drift-card drift-card-err';
+    detail.textContent = 'Could not complete drift scan: ' + e.message;
+    logAppend('[ERROR] ' + e.message, 'error');
+    showAlert('action-alert', 'Drift scan failed: ' + e.message, 'error');
+  } finally { btn.disabled = false; }
+}
+
+async function runHeal() {
+  const btn = document.getElementById('btn-heal');
+  btn.disabled = true;
+  showAlert('action-alert', 'Running self-healing pipeline... this may take a minute.', 'info');
+  logAppend('Starting self-healing pipeline...');
+  try {
+    const data = await apiPost('/heal', {});
+    if (data.ok) {
+      const outcome = data.data.outcome || 'unknown';
+      logAppend('[HEAL] Pipeline completed — outcome: ' + outcome, outcome.includes('fail') ? 'error' : 'success');
+      showAlert('action-alert', 'Healing completed: ' + outcome, outcome.includes('fail') ? 'error' : 'success');
+      logAppend(JSON.stringify(data.data.steps, null, 2));
+      refreshDashboard();
+    }
+  } catch (e) {
+    logAppend('[ERROR] ' + e.message, 'error');
+    showAlert('action-alert', 'Heal failed: ' + e.message, 'error');
+  } finally { btn.disabled = false; }
+}
+
+async function runCheckov() {
+  const btn = document.getElementById('btn-checkov');
+  btn.disabled = true;
+  showAlert('action-alert', 'Running Checkov security scan...', 'info');
+  logAppend('Starting Checkov scan...');
+  try {
+    const data = await apiPost('/run_checkov', {});
+    if (data.ok) {
+      if (data.data.install_required) {
+        logAppend('[WARN] Checkov not installed. Run: pip install checkov', 'error');
+        showAlert('action-alert', 'Checkov not installed. Run: pip install checkov', 'error');
+        return;
+      }
+      const parsed = data.data.parsed;
+      let passed = 0, failed = 0;
+      if (parsed) {
+        const results = Array.isArray(parsed) ? parsed : [parsed];
+        results.forEach(r => {
+          const s = r.summary || {};
+          passed += s.passed || 0;
+          failed += s.failed || 0;
+        });
+      }
+      logAppend(`[SCAN] Checkov: ${passed} passed, ${failed} failed`, failed > 0 ? 'warn' : 'success');
+      showAlert('action-alert', `Security scan: ${passed} passed, ${failed} failed. Go to Security page for details.`, failed > 0 ? 'error' : 'success');
+    }
+  } catch (e) {
+    logAppend('[ERROR] ' + e.message, 'error');
+    showAlert('action-alert', 'Checkov failed: ' + e.message, 'error');
+  } finally { btn.disabled = false; }
+}
+
+async function syncWithAws() {
+  const btn = document.getElementById('btn-sync-aws');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Syncing...';
+  showAlert('sync-alert', 'Running terraform refresh to sync state with live AWS...', 'info');
+  logAppend('Syncing Terraform state with live AWS...');
+  try {
+    const resp = await apiGet('/ui/api/dashboard_summary?refresh=true');
+    if (!resp.ok) throw new Error('Refresh failed');
+    const d = resp.data;
+    renderStatusCards(d);
+    renderConfigBadges(d);
+    renderResourceTable(d);
+    renderTfFiles(d);
+
+    // Check for terminated/deleted resources
+    const resources = (d.terraform.resources || []).filter(r => r.mode === 'managed');
+    const dead = resources.filter(r => r.state === 'terminated' || r.state === 'not_found' || r.state === 'deleted');
+    if (dead.length > 0) {
+      showAlert('sync-alert', dead.length + ' resource(s) no longer exist in AWS. Run terraform apply or destroy to clean up state.', 'error');
+      logAppend('[WARN] ' + dead.length + ' resource(s) terminated/deleted in AWS but still in Terraform state.', 'warn');
+    } else {
+      showAlert('sync-alert', 'State synced with AWS — all resources verified live.', 'success');
+      logAppend('[OK] State synced — all resources match live AWS.', 'success');
+    }
+  } catch (e) {
+    showAlert('sync-alert', 'Sync failed: ' + e.message, 'error');
+    logAppend('[ERROR] AWS sync failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '&#8635; Sync with AWS';
+  }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,743 @@
+{% extends "base.html" %}
+{% block title %}Modify Infrastructure{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>&#9998; Modify Infrastructure</h2>
+  <p>Fetch the latest code from your GitHub repo, describe what you want to change, review the diff, create a PR, then merge &amp; deploy — all from one place.</p>
+</div>
+
+<div id="mod-alert" class="alert"></div>
+
+<!-- Source: Sync from Repo -->
+<div class="section">
+  <div class="section-title">&#9729; Source: GitHub Repository</div>
+  <div class="card" style="max-width:900px; padding:20px;">
+    <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+      <div>
+        <div class="card-label">Repository</div>
+        <div id="sync-repo" style="font-family:monospace; color:var(--accent); font-size:0.95em;">Loading...</div>
+      </div>
+      <div>
+        <div class="card-label">Branch</div>
+        <div id="sync-branch" style="font-family:monospace; color:var(--text-secondary); font-size:0.95em;">—</div>
+      </div>
+      <div>
+        <div class="card-label">Status</div>
+        <span id="sync-status" class="badge badge-blue">Not synced</span>
+      </div>
+      <button class="btn btn-outline" onclick="syncFromRepo()" id="btn-sync" style="margin-left:auto;">
+        &#8635; Fetch Latest from Repo
+      </button>
+    </div>
+    <div id="sync-files" style="margin-top:12px; display:none;">
+      <div class="card-label">Synced Files</div>
+      <div id="sync-files-list" style="font-family:monospace; font-size:0.88em; color:var(--text-secondary);"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Current Code Overview -->
+<div class="section">
+  <div class="section-title">Current Infrastructure Files</div>
+  <div id="current-files-list" class="modify-files-grid">
+    <div class="card" style="opacity:0.6;padding:20px;text-align:center;">Sync from repo or load local files...</div>
+  </div>
+</div>
+
+<!-- Change Request -->
+<div class="section">
+  <div class="section-title">What do you want to change?</div>
+  <div class="card" style="max-width:900px;">
+    <textarea id="change-input" class="gen-textarea" rows="4"
+      placeholder="Example: Enable versioning on my S3 bucket and add a lifecycle rule to expire objects after 90 days"></textarea>
+    <div style="margin-top:16px; display:grid; gap:8px;">
+      <div class="card-label">PR Branch</div>
+      <input type="text" id="branch-name" class="form-input" placeholder="infra-modify-123456 or feature/custom-branch">
+      <small style="color:var(--text-secondary); font-size:12px;">Use an existing branch or type a new branch name. If it does not exist, it will be created from the repository default branch.</small>
+    </div>
+    <div class="prompt-examples">
+      <span class="prompt-example-label">Common changes:</span>
+      <button class="btn-chip" onclick="setChange('Add tags Environment=Development and ManagedBy=terraform to the EC2 instance')">EC2 Tags</button>
+      <button class="btn-chip" onclick="setChange('Allow all public access on the S3 bucket (set all block_public_access to false)')">Allow S3 Public</button>
+      <button class="btn-chip" onclick="setChange('Enable versioning on the S3 bucket')">Enable Versioning</button>
+      <button class="btn-chip" onclick="setChange('Add a lifecycle rule to transition S3 objects to Glacier after 30 days')">Lifecycle Rules</button>
+      <button class="btn-chip" onclick="setChange('Change the EC2 instance type to t3.micro')">Change Instance Type</button>
+      <button class="btn-chip" onclick="setChange('Add server-side encryption with AWS KMS to the S3 bucket')">Add Encryption</button>
+    </div>
+    <div style="margin-top:16px;">
+      <button class="btn btn-primary" onclick="modifyInfra()" id="btn-modify">&#9998; Analyze &amp; Modify</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pipeline Steps -->
+<div class="section" id="pipeline-section" style="display:none;">
+  <div class="section-title">Modification Pipeline</div>
+  <div class="pipeline-steps">
+    <div class="step-card" id="step-analyze">
+      <div class="step-num">1</div>
+      <div class="step-label">AI Analyze</div>
+      <div class="step-status" id="step-analyze-status">Waiting</div>
+    </div>
+    <div class="step-arrow">&#8594;</div>
+    <div class="step-card" id="step-diff">
+      <div class="step-num">2</div>
+      <div class="step-label">Review Diff</div>
+      <div class="step-status" id="step-diff-status">Waiting</div>
+    </div>
+    <div class="step-arrow">&#8594;</div>
+    <div class="step-card" id="step-deploy">
+      <div class="step-num">3</div>
+      <div class="step-label">PR &amp; Pipeline</div>
+      <div class="step-status" id="step-deploy-status">Waiting</div>
+    </div>
+  </div>
+</div>
+
+<!-- Token Utilization -->
+<div class="section" id="token-usage-section" style="display:none;">
+  <div class="section-title">LLM Token Utilization</div>
+  <div class="card" style="padding:16px; display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start;">
+    <div style="min-width:180px;">
+      <div style="font-size:12px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.08em;">Estimated Cost</div>
+      <div id="token-usage-total" style="font-size:30px; font-weight:700; margin-top:4px;">$0.0000</div>
+      <div id="token-usage-note" style="font-size:12px; color:var(--text-secondary); margin-top:4px;"></div>
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; flex:1; min-width:260px;">
+      <div>
+        <div style="font-size:12px; color:var(--text-secondary);">Input Tokens</div>
+        <div id="token-usage-input" style="font-size:18px; font-weight:600;">0</div>
+      </div>
+      <div>
+        <div style="font-size:12px; color:var(--text-secondary);">Output Tokens</div>
+        <div id="token-usage-output" style="font-size:18px; font-weight:600;">0</div>
+      </div>
+      <div>
+        <div style="font-size:12px; color:var(--text-secondary);">Total Tokens</div>
+        <div id="token-usage-total-tokens" style="font-size:18px; font-weight:600;">0</div>
+      </div>
+      <div>
+        <div style="font-size:12px; color:var(--text-secondary);">Model</div>
+        <div id="token-usage-model" style="font-size:18px; font-weight:600;">—</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Diff View -->
+<div class="section" id="diff-section" style="display:none;">
+  <div class="section-title">
+    Proposed Changes
+    <span id="files-changed-count" class="badge badge-blue" style="margin-left:8px;"></span>
+  </div>
+  <div id="diff-container"></div>
+</div>
+
+<!-- Action Buttons -->
+<div class="section" id="action-section" style="display:none;">
+  <div class="btn-group">
+    <button class="btn btn-primary" onclick="applyModification('pr')" id="btn-pr" data-pr-action="true" style="background:var(--accent);">
+      &#128196; Create PR &amp; Deploy via Pipeline
+    </button>
+    <button class="btn btn-danger" onclick="discardChanges()" id="btn-discard">
+      &#10005; Discard Changes
+    </button>
+    <button class="btn btn-outline" onclick="modifyInfra()">&#8635; Retry with Different Prompt</button>
+  </div>
+</div>
+
+<!-- PR Tracking + Merge & Deploy -->
+<div class="section" id="pr-tracking-section" style="display:none;">
+  <div class="section-title">&#128196; Pull Request</div>
+  <div class="card" style="padding:20px;">
+    <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+      <div>
+        <span style="font-weight:600; font-size:1.05em;">PR <a id="pr-track-link" href="#" target="_blank" style="color:var(--accent);">#—</a></span>
+        <span id="pr-track-title" style="color:var(--text-secondary); margin-left:8px;"></span>
+      </div>
+      <span id="pr-track-status" class="badge badge-blue">Open</span>
+      <button class="btn btn-outline btn-sm" onclick="checkPrStatus()" id="btn-check-pr" style="padding:4px 14px; font-size:0.85em;">
+        &#8635; Refresh Status
+      </button>
+    </div>
+    <div style="margin-top:16px; display:flex; gap:12px; flex-wrap:wrap;">
+      <button class="btn btn-primary" onclick="mergeAndDeploy()" id="btn-merge-deploy" style="background:var(--green);">
+        &#9654; Merge PR &amp; Deploy via Pipeline
+      </button>
+      <span style="color:var(--text-secondary); font-size:0.88em; align-self:center;">
+        Merges the PR, then triggers the GitHub Actions pipeline for deployment.
+      </span>
+    </div>
+    <!-- Pipeline Status -->
+    <div id="pipeline-monitor-section" style="display:none; margin-top:16px; border-top:1px solid var(--border); padding-top:16px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;">
+        <div style="font-weight:600;">Pipeline Status</div>
+        <div>
+          <span id="modify-pipeline-badge" class="badge badge-yellow">Running</span>
+          <a id="modify-pipeline-link" href="#" target="_blank" class="btn btn-outline btn-sm" style="margin-left:8px;padding:2px 10px;font-size:0.8em;">Open in GitHub</a>
+        </div>
+      </div>
+      <div id="modify-plan-analysis" style="display:none; margin-top:12px;">
+        <div style="font-weight:600; margin-bottom:8px;">Terraform Plan Analysis</div>
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+          <span id="modify-plan-verdict" class="badge badge-blue">Needs Review</span>
+          <span id="modify-plan-counts" style="font-size:12px; color:var(--text-secondary);"></span>
+        </div>
+        <div style="display:grid; gap:8px;">
+          <div>
+            <div class="card-label" style="margin-bottom:4px;">LLM Analysis</div>
+            <pre id="modify-plan-analysis-text" class="modify-diff-block" style="max-height:220px; overflow:auto;"></pre>
+          </div>
+          <div>
+            <div class="card-label" style="margin-bottom:4px;">Plan Logs</div>
+            <pre id="modify-plan-logs" class="modify-diff-block" style="max-height:260px; overflow:auto;"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="log-box" id="apply-output" style="display:none;"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let lastChangeRequest = '';
+let activePrNumber = null;
+let activePrUrl = '';
+
+document.addEventListener('DOMContentLoaded', () => { loadRepoInfo(); loadCurrentFiles(); });
+
+function setChange(text) {
+  document.getElementById('change-input').value = text;
+}
+
+function updateStep(stepId, status) {
+  const el = document.getElementById(stepId);
+  const statusEl = document.getElementById(stepId + '-status');
+  el.classList.remove('step-active', 'step-done', 'step-error');
+  if (status === 'active') { el.classList.add('step-active'); statusEl.textContent = 'Running...'; }
+  else if (status === 'done') { el.classList.add('step-done'); statusEl.textContent = 'Done'; }
+  else if (status === 'error') { el.classList.add('step-error'); statusEl.textContent = 'Failed'; }
+  else { statusEl.textContent = 'Waiting'; }
+}
+
+function resetSteps() {
+  ['step-analyze', 'step-diff', 'step-deploy'].forEach(id => updateStep(id, ''));
+}
+
+function renderTokenUtilization(data) {
+  const section = document.getElementById('token-usage-section');
+  if (!data) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = '';
+  document.getElementById('token-usage-total').textContent = '$' + Number(data.estimated_cost || 0).toFixed(4);
+  document.getElementById('token-usage-input').textContent = (data.input_tokens || 0).toLocaleString();
+  document.getElementById('token-usage-output').textContent = (data.output_tokens || 0).toLocaleString();
+  document.getElementById('token-usage-total-tokens').textContent = (data.total_tokens || 0).toLocaleString();
+  document.getElementById('token-usage-model').textContent = data.model_id || '—';
+  document.getElementById('token-usage-note').textContent = data.note || 'Estimated token utilization';
+}
+
+async function loadCurrentFiles() {
+  const container = document.getElementById('current-files-list');
+  try {
+    const healthData = await apiGet('/health');
+    const workdir = healthData.ok ? healthData.data.workdir : 'unknown';
+    container.innerHTML = `<div class="card" style="padding:16px;">
+      <div class="card-label">Working Directory</div>
+      <div style="font-family:monospace;color:var(--accent);margin:8px 0;">${escapeHtml(workdir)}</div>
+      <div style="color:var(--text-secondary);font-size:13px;">Click "Fetch Latest from Repo" to sync the latest merged code before modifying.</div>
+    </div>`;
+  } catch(e) {
+    container.innerHTML = '<div class="card" style="padding:16px;color:var(--red);">Failed to load: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function loadRepoInfo() {
+  try {
+    const cfg = await apiGet('/ui/api/config');
+    if (cfg.ok && cfg.data.github_repo) {
+      document.getElementById('sync-repo').textContent = cfg.data.github_repo;
+    } else {
+      document.getElementById('sync-repo').textContent = 'Not configured — set in Settings';
+    }
+  } catch(e) { /* ignore */ }
+}
+
+async function syncFromRepo() {
+  const btn = document.getElementById('btn-sync');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Fetching...';
+  document.getElementById('sync-status').className = 'badge badge-blue';
+  document.getElementById('sync-status').textContent = 'Syncing...';
+
+  try {
+    const data = await apiPost('/infra/modify/sync', {});
+    if (data.ok) {
+      const r = data.data;
+      document.getElementById('sync-branch').textContent = r.branch;
+      const branchInput = document.getElementById('branch-name');
+      if (branchInput && !branchInput.value.trim()) {
+        branchInput.value = r.branch;
+      }
+      document.getElementById('sync-status').className = 'badge badge-green';
+      document.getElementById('sync-status').textContent = 'Synced';
+
+      const filesList = document.getElementById('sync-files');
+      filesList.style.display = '';
+      document.getElementById('sync-files-list').textContent = r.synced_files.join(', ');
+
+      const stateMsg = r.state_migrated ? ' State migrated from .generated/ workspace.' : '';
+      showAlert('mod-alert', `Synced ${r.synced_files.length} file(s) from ${r.repo} (${r.branch}).${stateMsg} Ready to modify!`, 'success');
+      loadCurrentFiles();
+    } else {
+      document.getElementById('sync-status').className = 'badge badge-red';
+      document.getElementById('sync-status').textContent = 'Failed';
+      showAlert('mod-alert', 'Sync failed: ' + data.error, 'error');
+    }
+  } catch(e) {
+    document.getElementById('sync-status').className = 'badge badge-red';
+    document.getElementById('sync-status').textContent = 'Error';
+    showAlert('mod-alert', 'Sync error: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '&#8635; Fetch Latest from Repo';
+}
+
+async function modifyInfra() {
+  const changeRequest = document.getElementById('change-input').value.trim();
+  if (!changeRequest) {
+    showAlert('mod-alert', 'Please describe what change you want to make.', 'error');
+    return;
+  }
+  lastChangeRequest = changeRequest;
+
+  const btn = document.getElementById('btn-modify');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> AI is analyzing...';
+
+  // Show pipeline, hide results
+  document.getElementById('pipeline-section').style.display = '';
+  document.getElementById('diff-section').style.display = 'none';
+  document.getElementById('action-section').style.display = 'none';
+  document.getElementById('token-usage-section').style.display = 'none';
+  document.getElementById('apply-output').style.display = 'none';
+  resetSteps();
+
+  // Step 1: AI Analyze + Modify
+  updateStep('step-analyze', 'active');
+  showAlert('mod-alert', 'AI is reading your infrastructure and generating modifications...', 'info');
+
+  try {
+    const data = await apiPost('/infra/modify', { change_request: changeRequest });
+    if (!data.ok) {
+      updateStep('step-analyze', 'error');
+      showAlert('mod-alert', 'Modification failed: ' + data.error, 'error');
+      btn.disabled = false;
+      btn.innerHTML = '&#9998; Analyze &amp; Modify';
+      return;
+    }
+
+    updateStep('step-analyze', 'done');
+    const result = data.data;
+    renderTokenUtilization(result.token_utilization);
+
+    // Step 2: Show Diff
+    updateStep('step-diff', 'active');
+    renderDiffs(result.original_files, result.modified_files, result.diffs);
+    document.getElementById('diff-section').style.display = '';
+    document.getElementById('files-changed-count').textContent = result.files_changed.length + ' file(s) changed';
+    updateStep('step-diff', 'done');
+
+    if (result.files_changed.length === 0) {
+      showAlert('mod-alert', 'AI found no changes needed. The infrastructure already matches your request.', 'info');
+      btn.disabled = false;
+      btn.innerHTML = '&#9998; Analyze &amp; Modify';
+      return;
+    }
+
+    // Show action buttons — user reviews diff then creates PR
+    document.getElementById('action-section').style.display = '';
+    showAlert('mod-alert', 'Changes ready! Review the diff above, then create a PR to trigger the pipeline.', 'success');
+
+  } catch (e) {
+    updateStep('step-analyze', 'error');
+    showAlert('mod-alert', 'Error: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '&#9998; Analyze &amp; Modify';
+}
+
+function renderDiffs(originalFiles, modifiedFiles, diffs) {
+  const container = document.getElementById('diff-container');
+  container.innerHTML = '';
+
+  const allFiles = new Set([...Object.keys(originalFiles || {}), ...Object.keys(modifiedFiles || {})]);
+
+  for (const fname of allFiles) {
+    const oldContent = (originalFiles || {})[fname] || '';
+    const newContent = (modifiedFiles || {})[fname] || '';
+    const hasDiff = diffs && diffs[fname];
+
+    const card = document.createElement('div');
+    card.className = 'drift-resource-card';
+
+    const header = document.createElement('div');
+    header.className = 'drift-resource-header';
+    header.innerHTML = `<strong>${escapeHtml(fname)}</strong>
+      <span class="badge ${hasDiff ? 'badge-yellow' : 'badge-green'}">${hasDiff ? 'Modified' : 'Unchanged'}</span>`;
+    card.appendChild(header);
+
+    if (hasDiff) {
+      const diffBlock = document.createElement('pre');
+      diffBlock.className = 'modify-diff-block';
+      // Color the diff lines
+      const lines = diffs[fname].split('\n');
+      for (const line of lines) {
+        const span = document.createElement('span');
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          span.className = 'diff-line-add';
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          span.className = 'diff-line-remove';
+        } else if (line.startsWith('@@')) {
+          span.className = 'diff-line-hunk';
+        } else {
+          span.className = 'diff-line-context';
+        }
+        span.textContent = line;
+        diffBlock.appendChild(span);
+        diffBlock.appendChild(document.createTextNode('\n'));
+      }
+      card.appendChild(diffBlock);
+    }
+
+    container.appendChild(card);
+  }
+}
+
+async function applyModification(mode) {
+  const label = mode === 'pr' ? 'Creating PR...' : 'Applying changes...';
+  const confirmMsg = mode === 'pr'
+    ? 'This will create a Pull Request with the current changes.\n\nContinue?'
+    : '⚠️ This will DIRECTLY APPLY changes to your live infrastructure.\n\nAre you sure?';
+
+  if (!confirm(confirmMsg)) return;
+
+  const btnApply = document.getElementById('btn-apply');
+  const prButtons = Array.from(document.querySelectorAll('[data-pr-action="true"]'));
+  prButtons.forEach(btn => { btn.disabled = true; });
+  if (btnApply) btnApply.disabled = true;
+  updateStep('step-deploy', 'active');
+
+  const output = document.getElementById('apply-output');
+  output.style.display = '';
+  output.textContent = label + '\n';
+
+  try {
+    const data = await apiPost('/infra/modify/apply', {
+      mode: mode,
+      change_request: lastChangeRequest,
+      branch: mode === 'pr' ? document.getElementById('branch-name').value.trim() : '',
+    });
+
+    if (data.ok) {
+      const result = data.data;
+      if (result.action === 'pr_created' || result.action === 'pr_updated') {
+        const isUpdate = result.action === 'pr_updated';
+        output.textContent += (isUpdate ? 'PR #' + result.pr_number + ' updated with new changes!\n' : 'PR #' + result.pr_number + ' created successfully!\n');
+        output.textContent += 'URL: ' + result.pr_url + '\n';
+        output.textContent += 'Branch: ' + result.branch + '\n';
+        updateStep('step-deploy', 'done');
+        showAlert('mod-alert',
+          (isUpdate
+            ? 'PR updated! <a href="' + escapeHtml(result.pr_url) + '" target="_blank" style="color:var(--accent);">View PR #' + result.pr_number + '</a> — New changes pushed to existing branch.'
+            : 'Pull Request created! <a href="' + escapeHtml(result.pr_url) + '" target="_blank" style="color:var(--accent);">View PR #' + result.pr_number + '</a> — Review it, then Merge &amp; Deploy below.'),
+          'success');
+
+        // Show PR tracking section
+        activePrNumber = result.pr_number;
+        activePrUrl = result.pr_url;
+        showPrTracking(result.pr_number, result.pr_url, lastChangeRequest);
+      } else {
+        output.textContent += (result.stdout || '') + '\n' + (result.stderr || '');
+        if (result.rc === 0) {
+          updateStep('step-deploy', 'done');
+          showAlert('mod-alert', 'Changes applied successfully!', 'success');
+        } else {
+          updateStep('step-deploy', 'error');
+          showAlert('mod-alert', 'Apply completed with errors. Check output.', 'error');
+        }
+      }
+    } else {
+      output.textContent += 'Error: ' + data.error + '\n';
+      updateStep('step-deploy', 'error');
+      showAlert('mod-alert', 'Failed: ' + data.error, 'error');
+    }
+  } catch(e) {
+    output.textContent += 'Error: ' + e.message + '\n';
+    updateStep('step-deploy', 'error');
+  }
+
+  prButtons.forEach(btn => { btn.disabled = false; });
+  if (btnApply) btnApply.disabled = false;
+}
+
+async function discardChanges() {
+  try {
+    const data = await apiPost('/infra/modify/discard', {});
+    if (data.ok) {
+      showAlert('mod-alert', 'Changes discarded. Original files restored.', 'success');
+      document.getElementById('diff-section').style.display = 'none';
+      document.getElementById('plan-section').style.display = 'none';
+      document.getElementById('action-section').style.display = 'none';
+      document.getElementById('pipeline-section').style.display = 'none';
+    }
+  } catch(e) {
+    showAlert('mod-alert', 'Error discarding: ' + e.message, 'error');
+  }
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+function showPrTracking(prNumber, prUrl, title) {
+  const section = document.getElementById('pr-tracking-section');
+  section.style.display = '';
+  const link = document.getElementById('pr-track-link');
+  link.href = prUrl;
+  link.textContent = '#' + prNumber;
+  document.getElementById('pr-track-title').textContent = title;
+  document.getElementById('pr-track-status').className = 'badge badge-blue';
+  document.getElementById('pr-track-status').textContent = 'Open';
+}
+
+function renderModifyPlanAnalysis(result) {
+  const block = document.getElementById('modify-plan-analysis');
+  const verdictEl = document.getElementById('modify-plan-verdict');
+  const countsEl = document.getElementById('modify-plan-counts');
+  const analysisEl = document.getElementById('modify-plan-analysis-text');
+  const logsEl = document.getElementById('modify-plan-logs');
+  if (!block || !verdictEl || !countsEl || !analysisEl || !logsEl) return;
+
+  const hasAny = (result.plan_text && result.plan_text.trim()) || (result.plan_analysis && result.plan_analysis.trim());
+  if (!hasAny) {
+    block.style.display = 'none';
+    return;
+  }
+
+  const verdict = (result.plan_verdict || 'needs-review').toLowerCase();
+  const badgeClass = verdict === 'looks-good'
+    ? 'badge-green'
+    : (verdict === 'partial-match' || verdict === 'needs-review')
+      ? 'badge-yellow'
+      : 'badge-red';
+
+  verdictEl.className = 'badge ' + badgeClass;
+  verdictEl.textContent = verdict.replace(/-/g, ' ');
+
+  const counts = result.plan_counts || { add: 0, change: 0, destroy: 0 };
+  countsEl.textContent = `Plan: add=${counts.add || 0}, change=${counts.change || 0}, destroy=${counts.destroy || 0}`;
+
+  analysisEl.textContent = result.plan_analysis || 'No analysis available.';
+  logsEl.textContent = result.plan_text || 'Terraform plan logs were not found in this workflow run.';
+
+  block.style.display = '';
+}
+
+async function checkPrStatus() {
+  if (!activePrNumber) return;
+  const btn = document.getElementById('btn-check-pr');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+
+  try {
+    const data = await apiPost('/infra/modify/pr_status', { pr_number: activePrNumber });
+    if (data.ok) {
+      const pr = data.data;
+      const badge = document.getElementById('pr-track-status');
+      if (pr.merged) {
+        badge.className = 'badge badge-green';
+        badge.textContent = 'Merged';
+        showAlert('mod-alert', 'PR #' + pr.pr_number + ' has been merged! Click "Merge PR & Deploy" to apply changes to AWS.', 'success');
+      } else if (pr.state === 'closed') {
+        badge.className = 'badge badge-red';
+        badge.textContent = 'Closed';
+      } else {
+        badge.className = 'badge badge-blue';
+        badge.textContent = 'Open';
+      }
+    }
+  } catch(e) {
+    showAlert('mod-alert', 'Error checking PR: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '&#8635; Refresh Status';
+}
+
+async function mergeAndDeploy() {
+  if (!activePrNumber) {
+    showAlert('mod-alert', 'No active PR to merge.', 'error');
+    return;
+  }
+  if (!confirm('This will MERGE the PR and trigger the GitHub Actions pipeline for deployment.\n\nThis may create/modify/destroy real resources and incur costs.\n\nContinue?')) return;
+
+  const btn = document.getElementById('btn-merge-deploy');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Merging &amp; triggering pipeline...';
+  updateStep('step-deploy', 'active');
+
+  const output = document.getElementById('apply-output');
+  output.style.display = '';
+  output.textContent = '';
+
+  try {
+    // Step 1: Merge the PR
+    output.textContent += 'Merging PR...\n';
+    const mergeData = await apiPost('/infra/modify/merge_and_deploy', { pr_number: activePrNumber });
+
+    if (!mergeData.ok) {
+      output.textContent += 'Error: ' + mergeData.error + '\n';
+      updateStep('step-deploy', 'error');
+      showAlert('mod-alert', 'Merge failed: ' + mergeData.error, 'error');
+      btn.disabled = false;
+      btn.innerHTML = '&#9654; Merge PR &amp; Deploy via Pipeline';
+      return;
+    }
+
+    const mergeResult = mergeData.data;
+    output.textContent += `PR #${mergeResult.pr_number} ${mergeResult.merge_status}.\n`;
+
+    document.getElementById('pr-track-status').className = 'badge badge-green';
+    document.getElementById('pr-track-status').textContent = 'Merged';
+
+    // Step 2: Trigger the pipeline on main branch
+    output.textContent += 'Triggering deployment pipeline on main branch...\n';
+
+    const pipelineData = await apiPost('/github/pipeline/deploy', {
+      repo: mergeResult.repo,
+      workflow_file: mergeResult.workflow_file,
+      branch: 'main',
+    });
+
+    if (!pipelineData.ok) {
+      output.textContent += 'Pipeline trigger failed: ' + pipelineData.error + '\n';
+      output.textContent += 'PR merged successfully. Pipeline may trigger automatically on push, or trigger it manually.\n';
+      updateStep('step-deploy', 'done');
+      document.getElementById('step-deploy-status').textContent = 'Merged';
+      showAlert('mod-alert', 'PR merged! Pipeline trigger failed — it may auto-trigger on push.', 'info');
+      btn.disabled = false;
+      btn.innerHTML = '&#9654; Merge PR &amp; Deploy via Pipeline';
+      return;
+    }
+
+    const runInfo = pipelineData.data;
+    if (runInfo.already_deployed) {
+      output.textContent += `This branch is already deployed at the current commit (run #${runInfo.run_number} on ${runInfo.branch}).\n`;
+      updateStep('step-deploy', 'done');
+      showAlert('mod-alert', `Branch ${runInfo.branch} is already deployed at this commit. A new pipeline was not started.`, 'info');
+      btn.disabled = false;
+      btn.innerHTML = '&#9654; Merge PR &amp; Deploy via Pipeline';
+      return;
+    }
+    if (runInfo.reused_existing_run) {
+      output.textContent += `A pipeline is already running on ${runInfo.branch} (run #${runInfo.run_number}). Reusing it.\n`;
+    } else {
+      output.textContent += `Pipeline started: Run #${runInfo.run_number}\n`;
+    }
+    output.textContent += `URL: ${runInfo.html_url}\n\n`;
+
+    // Show pipeline monitor
+    const pipelineSection = document.getElementById('pipeline-monitor-section');
+    if (pipelineSection) {
+      pipelineSection.style.display = '';
+      document.getElementById('modify-pipeline-link').href = runInfo.html_url;
+      document.getElementById('modify-pipeline-link').textContent = `Run #${runInfo.run_number}`;
+      document.getElementById('modify-pipeline-badge').textContent = 'Running';
+      document.getElementById('modify-pipeline-badge').className = 'badge badge-yellow';
+    }
+
+    showAlert('mod-alert', 'PR merged. Pipeline running... Waiting for completion.', 'info');
+
+    // Step 3: Poll for pipeline completion
+    await pollModifyPipelineStatus(mergeResult.repo, runInfo.run_id, 'main', output);
+
+  } catch(e) {
+    output.textContent += '\nError: ' + e.message;
+    updateStep('step-deploy', 'error');
+    showAlert('mod-alert', 'Error: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '&#9654; Merge PR &amp; Deploy via Pipeline';
+}
+
+async function pollModifyPipelineStatus(repo, runId, branch, outputEl) {
+  const maxPolls = 90;
+  for (let i = 0; i < maxPolls; i++) {
+    await new Promise(r => setTimeout(r, 8000));
+
+    try {
+      const status = await apiGet(`/github/pipeline/status?repo=${encodeURIComponent(repo)}&run_id=${encodeURIComponent(runId)}&requirement=${encodeURIComponent(lastChangeRequest || '')}`);
+      if (!status.ok) {
+        outputEl.textContent += 'Status check failed: ' + status.error + '\n';
+        continue;
+      }
+
+      const result = status.data;
+      renderModifyPlanAnalysis(result);
+
+      // Update pipeline badge
+      const badge = document.getElementById('modify-pipeline-badge');
+      if (badge) {
+        badge.textContent = result.status;
+        badge.className = 'badge ' + (result.completed ? (result.success ? 'badge-green' : 'badge-red') : 'badge-yellow');
+      }
+
+      if (!result.completed) continue;
+
+      if (result.success) {
+        outputEl.textContent += '\n--- Pipeline Completed Successfully ---\n';
+        if (result.logs) outputEl.textContent += result.logs.slice(-3000) + '\n';
+        if (result.plan_analysis) {
+          outputEl.textContent += '\n--- Terraform Plan Analysis ---\n';
+          outputEl.textContent += (result.plan_analysis.slice(0, 2500) + '\n');
+        }
+        updateStep('step-deploy', 'done');
+        showAlert('mod-alert', 'Infrastructure deployed successfully via pipeline!', 'success');
+        return;
+      } else {
+        outputEl.textContent += '\n--- Pipeline Failed ---\n';
+        if (result.error_text) outputEl.textContent += result.error_text + '\n';
+        else if (result.logs) outputEl.textContent += result.logs.slice(-3000) + '\n';
+        if (result.plan_analysis) {
+          outputEl.textContent += '\n--- Terraform Plan Analysis ---\n';
+          outputEl.textContent += (result.plan_analysis.slice(0, 2500) + '\n');
+        }
+
+        updateStep('step-deploy', 'error');
+        showAlert('mod-alert', 'Pipeline failed. Review logs below.', 'error');
+        return;
+      }
+    } catch (e) {
+      outputEl.textContent += 'Poll error: ' + e.message + '\n';
+    }
+  }
+
+  outputEl.textContent += '\nPipeline still running after timeout. Check GitHub Actions.\n';
+  updateStep('step-deploy', 'error');
+  showAlert('mod-alert', 'Pipeline timed out. Check GitHub Actions.', 'error');
+}
+</script>
+{% endblock %}

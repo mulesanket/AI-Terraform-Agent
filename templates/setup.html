@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Setup — Terraform Agent</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    body { display: flex; align-items: flex-start; justify-content: center; min-height: 100vh; background: var(--bg-primary); padding: 40px 20px; }
+    .setup-container {
+      width: 100%; max-width: 700px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 40px;
+    }
+    .setup-header { text-align: center; margin-bottom: 32px; }
+    .setup-header h1 { font-size: 22px; color: var(--accent); margin-bottom: 4px; }
+    .setup-header p { font-size: 13px; color: var(--text-secondary); }
+    .setup-section { margin-bottom: 28px; }
+    .setup-section-title {
+      font-size: 14px; font-weight: 700; color: var(--text-primary);
+      padding-bottom: 8px; border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .form-row { display: grid; grid-template-columns: 180px 1fr; gap: 12px; align-items: center; margin-bottom: 12px; }
+    .form-row label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+    .form-row input, .form-row select {
+      width: 100%; padding: 9px 12px; border: 1px solid var(--border);
+      border-radius: var(--radius); background: var(--bg-secondary);
+      color: var(--text-primary); font-size: 13px; outline: none;
+    }
+    .form-row input:focus, .form-row select:focus { border-color: var(--accent); }
+    .form-hint { grid-column: 2; font-size: 11px; color: var(--text-secondary); margin-top: -6px; }
+    .btn-submit {
+      display: block; width: 100%; padding: 12px; margin-top: 24px;
+      border: none; border-radius: var(--radius);
+      background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: background 0.2s;
+    }
+    .btn-submit:hover { background: var(--accent-hover); }
+    .btn-skip {
+      display: block; text-align: center; margin-top: 12px;
+      color: var(--text-secondary); font-size: 13px; text-decoration: none;
+    }
+    .btn-skip:hover { color: var(--accent); }
+    .required-star { color: var(--red); }
+    .flash-messages { margin-bottom: 16px; }
+    .flash-msg { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin-bottom: 8px; }
+    .flash-error { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
+    .flash-success { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); }
+    .welcome-badge {
+      display: inline-block; padding: 4px 12px; border-radius: 12px;
+      background: var(--accent); color: #fff; font-size: 11px; font-weight: 600;
+      margin-bottom: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="setup-container">
+    <div class="setup-header">
+      <span class="welcome-badge">Welcome, {{ user.display_name }}!</span>
+      <h1>&#9881; Initial Configuration</h1>
+      <p>Set up your workspace, AWS, and GitHub settings. You only need to do this once.</p>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages">
+      {% for category, message in messages %}
+      <div class="flash-msg flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <form method="POST" action="/auth/setup">
+      <!-- Workspace -->
+      <div class="setup-section">
+        <div class="setup-section-title">&#128193; Workspace</div>
+        <div class="form-row">
+          <label>Working Directory <span class="required-star">*</span></label>
+          <input type="text" name="AGENT_WORKDIR" value="{{ config.get('AGENT_WORKDIR', '') }}" required
+                 placeholder="/path/to/your/terraform/project">
+        </div>
+        <div class="form-hint">The directory containing your Terraform (.tf) files</div>
+        <div class="form-row">
+          <label>Approval Mode</label>
+          <select name="APPROVAL_MODE">
+            <option value="pr" {% if config.get('APPROVAL_MODE') == 'pr' %}selected{% endif %}>PR Review (recommended)</option>
+            <option value="auto" {% if config.get('APPROVAL_MODE') == 'auto' %}selected{% endif %}>Auto-approve</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Cost Threshold ($)</label>
+          <input type="number" name="COST_THRESHOLD" step="0.01" value="{{ config.get('COST_THRESHOLD', '100') }}"
+                 placeholder="100">
+        </div>
+        <div class="form-hint">Block apply if estimated cost exceeds this amount</div>
+        <div class="form-row">
+          <label>Drift Check Interval</label>
+          <input type="number" name="DRIFT_CHECK_INTERVAL_MINUTES" value="{{ config.get('DRIFT_CHECK_INTERVAL_MINUTES', '30') }}"
+                 placeholder="30" min="5">
+        </div>
+        <div class="form-hint">Minutes between automatic drift checks</div>
+      </div>
+
+      <!-- AWS -->
+      <div class="setup-section">
+        <div class="setup-section-title">&#9729;&#65039; AWS Configuration</div>
+        <div class="form-row">
+          <label>AWS Access Key ID</label>
+          <input type="password" name="AWS_ACCESS_KEY_ID" value="{{ config.get('AWS_ACCESS_KEY_ID', '') }}"
+                 placeholder="AKIA... or ASIA...">
+        </div>
+        <div class="form-row">
+          <label>AWS Secret Access Key</label>
+          <input type="password" name="AWS_SECRET_ACCESS_KEY" value="{{ config.get('AWS_SECRET_ACCESS_KEY', '') }}"
+                 placeholder="Enter secret key">
+        </div>
+        <div class="form-row">
+          <label>AWS Session Token</label>
+          <input type="password" name="AWS_SESSION_TOKEN" value="{{ config.get('AWS_SESSION_TOKEN', '') }}"
+                 placeholder="Optional - for temporary credentials">
+        </div>
+        <div class="form-hint">Use access key credentials, or leave blank and use AWS profile/SSO instead</div>
+        <div class="form-row">
+          <label>AWS SSO Profile</label>
+          <input type="text" name="AWS_PROFILE" value="{{ config.get('AWS_PROFILE', '') }}"
+                 placeholder="my-sso-profile">
+        </div>
+        <div class="form-hint">Your AWS IAM Identity Center (SSO) profile name</div>
+        <div class="form-row">
+          <label>AWS Region</label>
+          <input type="text" name="AWS_DEFAULT_REGION" value="{{ config.get('AWS_DEFAULT_REGION', 'us-east-1') }}"
+                 placeholder="us-east-1">
+        </div>
+        <div class="form-row">
+          <label>Terraform State S3 Bucket</label>
+          <input type="text" name="TF_STATE_BUCKET" value="{{ config.get('TF_STATE_BUCKET', '') }}"
+                 placeholder="my-tfstate-bucket">
+        </div>
+        <div class="form-hint">GitHub Actions stores terraform.tfstate in this bucket (written to backend.tf)</div>
+        <div class="form-row">
+          <label>Terraform State Key (optional)</label>
+          <input type="text" name="TF_STATE_KEY" value="{{ config.get('TF_STATE_KEY', '') }}"
+                 placeholder="owner/repo/terraform.tfstate">
+        </div>
+        <div class="form-row">
+          <label>Terraform State Region</label>
+          <input type="text" name="TF_STATE_REGION" value="{{ config.get('TF_STATE_REGION', 'us-east-1') }}"
+                 placeholder="us-east-1">
+        </div>
+        <div class="form-hint">Must match the S3 bucket region (vaibhav-ai-poc-state-files is us-east-1)</div>
+      </div>
+
+      <!-- LLM -->
+      <div class="setup-section">
+        <div class="setup-section-title">&#129302; LLM Configuration</div>
+        <div class="form-row">
+          <label>LLM Provider</label>
+          <select name="LLM_PROVIDER">
+            <option value="bedrock" {% if config.get('LLM_PROVIDER', 'bedrock') == 'bedrock' %}selected{% endif %}>Amazon Bedrock</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Bedrock Model ID</label>
+          <input type="text" name="BEDROCK_MODEL_ID" value="{{ config.get('BEDROCK_MODEL_ID', 'eu.anthropic.claude-sonnet-5') }}"
+                 placeholder="eu.anthropic.claude-sonnet-5">
+        </div>
+        <div class="form-row">
+          <label>Bedrock Region</label>
+          <input type="text" name="BEDROCK_REGION" value="{{ config.get('BEDROCK_REGION', 'eu-west-2') }}"
+                 placeholder="eu-west-2">
+        </div>
+      </div>
+
+      <!-- GitHub -->
+      <div class="setup-section">
+        <div class="setup-section-title">
+          &#128025; GitHub Integration
+          {% if user.oauth_provider == 'github' %}
+          <span style="font-size:12px; color:var(--green); font-weight:400; margin-left:8px;">
+            &#10003; Authenticated as @{{ user.username }}
+          </span>
+          {% endif %}
+        </div>
+        {% if github_repos %}
+        <div class="form-row">
+          <label>GitHub Repository</label>
+          <select name="GITHUB_REPO" id="github-repo-select">
+            <option value="">— Select a repository —</option>
+            {% for repo in github_repos %}
+            <option value="{{ repo.full_name }}"
+                    {% if config.get('GITHUB_REPO') == repo.full_name %}selected{% endif %}>
+              {{ repo.full_name }}{% if repo.private %} &#128274;{% endif %}
+              {% if repo.description %} — {{ repo.description[:50] }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-hint">Showing your {{ github_repos|length }} most recently updated repositories</div>
+        {% else %}
+        <div class="form-row">
+          <label>GitHub Repository</label>
+          <input type="text" name="GITHUB_REPO" value="{{ config.get('GITHUB_REPO', '') }}"
+                 placeholder="owner/repo">
+        </div>
+        {% endif %}
+        {% if not user.oauth_provider == 'github' %}
+        <div class="form-row">
+          <label>GitHub PAT</label>
+          <input type="password" name="GITHUB_PAT" value="{{ config.get('GITHUB_PAT', '') }}"
+                 placeholder="ghp_...">
+        </div>
+        <div class="form-hint">Personal Access Token with repo scope</div>
+        {% endif %}
+      </div>
+
+      <!-- Notifications -->
+      <div class="setup-section">
+        <div class="setup-section-title">&#128276; Notifications</div>
+        <div class="form-row">
+          <label>Slack Webhook URL</label>
+          <input type="password" name="SLACK_WEBHOOK_URL" value="{{ config.get('SLACK_WEBHOOK_URL', '') }}"
+                 placeholder="https://hooks.slack.com/...">
+        </div>
+      </div>
+
+      <button type="submit" class="btn-submit">&#10003; Save Configuration &amp; Continue</button>
+    </form>
+
+    {% if user.is_configured %}
+    <a href="/ui" class="btn-skip">← Back to Dashboard</a>
+    {% endif %}
+  </div>
+</body>
+</html>

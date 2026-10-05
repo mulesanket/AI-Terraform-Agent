@@ -1,0 +1,168 @@
+name: Cost Estimate on PR
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/*.tf"
+      - "**/*.tfvars"
+
+permissions:
+  pull-requests: write
+  contents: read
+  id-token: write
+
+jobs:
+  cost-estimate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install boto3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Find Terraform directories
+        id: find-tf
+        run: |
+          # Find directories containing .tf files that were changed
+          TF_DIRS=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} \
+            | grep '\.tf$' \
+            | xargs -I{} dirname {} \
+            | sort -u \
+            | tr '\n' ' ')
+          echo "dirs=${TF_DIRS}" >> "$GITHUB_OUTPUT"
+          if [ -z "$TF_DIRS" ]; then
+            echo "No Terraform directories changed"
+            echo "has_tf=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Terraform dirs: $TF_DIRS"
+            echo "has_tf=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Terraform Plan & Cost Estimate
+        if: steps.find-tf.outputs.has_tf == 'true'
+        id: estimate
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+        run: |
+          COMMENT=""
+          TOTAL_MONTHLY=0
+
+          for dir in ${{ steps.find-tf.outputs.dirs }}; do
+            echo "Processing: $dir"
+            cd "$GITHUB_WORKSPACE/$dir"
+
+            # Init and plan
+            terraform init -input=false -no-color 2>/dev/null || continue
+            terraform plan -out=plan.out -input=false -no-color 2>/dev/null || continue
+            terraform show -json plan.out > plan.json 2>/dev/null || continue
+
+            cd "$GITHUB_WORKSPACE"
+          done
+
+          # Run the cost estimator on all plans
+          python -c "
+          import json, sys, os
+          sys.path.insert(0, '.')
+
+          # Minimal config stub so cost_estimator can import
+          class Config:
+              AWS_PROFILE = None
+              BEDROCK_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+
+          import cost_estimator
+          cost_estimator.Config = Config
+
+          dirs = '${{ steps.find-tf.outputs.dirs }}'.split()
+          all_resources = []
+          total = 0.0
+
+          for d in dirs:
+              plan_path = os.path.join(d, 'plan.json')
+              if not os.path.exists(plan_path):
+                  continue
+              with open(plan_path) as f:
+                  plan = json.load(f)
+              est = cost_estimator.estimate_from_plan(plan, region=os.environ.get('AWS_REGION', 'us-east-1'))
+              if not est.get('error'):
+                  total += est['total_monthly']
+                  for r in est.get('resources', []):
+                      r['directory'] = d
+                      all_resources.append(r)
+
+          # Build markdown comment
+          comment = cost_estimator.format_cost_markdown({
+              'total_monthly': round(total, 2),
+              'total_hourly': round(total / 730, 4),
+              'currency': 'USD',
+              'region': os.environ.get('AWS_REGION', 'us-east-1'),
+              'resource_count': len(all_resources),
+              'resources': all_resources,
+          })
+
+          # Write to file for the next step
+          with open('cost_comment.md', 'w') as f:
+              f.write(comment)
+
+          print(f'Total monthly estimate: \${total:,.2f}')
+          print(f'Resources analyzed: {len(all_resources)}')
+          "
+
+      - name: Post PR Comment
+        if: steps.find-tf.outputs.has_tf == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const commentPath = 'cost_comment.md';
+            if (!fs.existsSync(commentPath)) {
+              console.log('No cost comment generated');
+              return;
+            }
+
+            const body = fs.readFileSync(commentPath, 'utf8');
+            const marker = '<!-- cost-estimate-bot -->';
+            const fullBody = `${marker}\n${body}`;
+
+            // Find existing cost comment to update (avoid duplicates)
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: fullBody,
+              });
+              console.log('Updated existing cost estimate comment');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fullBody,
+              });
+              console.log('Created new cost estimate comment');
+            }

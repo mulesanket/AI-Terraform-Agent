@@ -1,0 +1,662 @@
+{% extends "base.html" %}
+{% block title %}Generate Infrastructure{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>&#10024; Generate Infrastructure</h2>
+  <p>Describe what you want to build in plain English — the AI will generate Terraform code, validate it, and deploy it.</p>
+</div>
+
+<div id="gen-alert" class="alert"></div>
+
+<!-- Prompt Input -->
+<div class="section">
+  <div class="section-title">What do you want to create?</div>
+  <div class="card" style="max-width:900px;">
+    <textarea id="prompt-input" class="gen-textarea" rows="4"
+      placeholder="Example: Create an Application Load Balancer with a Route53 DNS record pointing to it, in us-east-1 with HTTPS listener on port 443"></textarea>
+    <div class="prompt-examples">
+      <span class="prompt-example-label">Examples:</span>
+      <button class="btn-chip" onclick="setPrompt('Create an S3 bucket with versioning, KMS encryption, and block all public access')">S3 Bucket</button>
+      <button class="btn-chip" onclick="setPrompt('Create an Application Load Balancer with HTTPS listener, target group, and a Route53 A record alias pointing to the ALB')">ALB + DNS</button>
+      <button class="btn-chip" onclick="setPrompt('Create a VPC with 2 public subnets, 2 private subnets, NAT gateway, and internet gateway across 2 availability zones')">VPC Network</button>
+      <button class="btn-chip" onclick="setPrompt('Create an RDS PostgreSQL instance in a private subnet with Multi-AZ, encryption at rest, and automated backups')">RDS Database</button>
+      <button class="btn-chip" onclick="setPrompt('Create an ECS Fargate service running an nginx container behind an ALB with auto-scaling')">ECS Fargate</button>
+      <button class="btn-chip" onclick="setPrompt('Create a Lambda function triggered by an API Gateway REST endpoint with CloudWatch logging')">Lambda + API GW</button>
+    </div>
+    <div style="margin-top:16px;">
+      <button class="btn btn-primary" onclick="generateInfra()" id="btn-generate">&#10024; Generate Terraform Code</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pipeline Steps -->
+<div class="section" id="pipeline-section" style="display:none;">
+  <div class="section-title">Pipeline Progress</div>
+  <div class="pipeline-steps">
+    <div class="step-card" id="step-generate">
+      <div class="step-num">1</div>
+      <div class="step-label">Generate Code</div>
+      <div class="step-status" id="step-generate-status">Waiting</div>
+    </div>
+    <div class="step-arrow">&#8594;</div>
+    <div class="step-card" id="step-review">
+      <div class="step-num">2</div>
+      <div class="step-label">Review Code</div>
+      <div class="step-status" id="step-review-status">Waiting</div>
+    </div>
+    <div class="step-arrow">&#8594;</div>
+    <div class="step-card" id="step-apply">
+      <div class="step-num">3</div>
+      <div class="step-label">PR &amp; Pipeline</div>
+      <div class="step-status" id="step-apply-status">Waiting</div>
+    </div>
+  </div>
+</div>
+
+<!-- Token Utilization -->
+<div class="section" id="token-usage-section" style="display:none;">
+  <div class="section-title">LLM Token Utilization</div>
+  <div class="card" style="padding:16px; display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start;">
+    <div style="min-width:180px;">
+      <div style="font-size:12px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.08em;">Estimated Cost</div>
+      <div id="token-usage-total" style="font-size:30px; font-weight:700; margin-top:4px;">$0.0000</div>
+      <div id="token-usage-note" style="font-size:12px; color:var(--text-secondary); margin-top:4px;"></div>
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; flex:1; min-width:260px;">
+      <div>
+        <div style="font-size:12px; color:var(--text-secondary);">Input Tokens</div>
+        <div id="token-usage-input" style="font-size:18px; font-weight:600;">0</div>
+      </div>
+      <div>
+        <div style="font-size:12px; color:var(--text-secondary);">Output Tokens</div>
+        <div id="token-usage-output" style="font-size:18px; font-weight:600;">0</div>
+      </div>
+      <div>
+        <div style="font-size:12px; color:var(--text-secondary);">Total Tokens</div>
+        <div id="token-usage-total-tokens" style="font-size:18px; font-weight:600;">0</div>
+      </div>
+      <div>
+        <div style="font-size:12px; color:var(--text-secondary);">Model</div>
+        <div id="token-usage-model" style="font-size:18px; font-weight:600;">—</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Generated Code Preview -->
+<div class="section" id="code-section" style="display:none;">
+  <div class="section-title">Generated Terraform Code</div>
+  <div class="code-preview">
+    <div class="code-header">
+      <span id="code-filename">generated.tf</span>
+    </div>
+    <pre class="code-block" id="code-output"></pre>
+  </div>
+</div>
+
+<!-- Action Buttons -->
+<div class="section" id="action-section" style="display:none;">
+  <div class="btn-group">
+    <button class="btn btn-primary" onclick="createGeneratePR()" id="btn-pr" style="background:var(--accent);">
+      &#128196; Create PR Only
+    </button>
+    <button class="btn btn-primary" onclick="applyGenerated()" id="btn-apply" style="background:var(--green);">
+      &#9654; Deploy via Pipeline
+    </button>
+    <button class="btn btn-danger" onclick="destroyGenerated()" id="btn-destroy">
+      &#128465; Destroy Resources
+    </button>
+    <button class="btn btn-outline" onclick="regenerate()">&#8635; Regenerate</button>
+  </div>
+  <div id="pr-result" class="card" style="display:none;margin-top:12px;padding:16px;">
+    <strong>&#9989; PR Created:</strong>
+    <a id="pr-link" href="#" target="_blank" style="color:var(--accent);margin-left:8px;"></a>
+    <span id="pr-branch" style="color:var(--muted);margin-left:12px;font-size:0.9em;"></span>
+  </div>
+  <!-- Pipeline Log Section -->
+  <div id="pipeline-log-section" class="card" style="display:none;margin-top:12px;padding:16px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px;">
+      <div style="font-weight:700;">Pipeline Status</div>
+      <div>
+        <span id="pipeline-status-badge" class="badge badge-blue">Pending</span>
+        <a id="pipeline-run-link" href="#" target="_blank" class="btn btn-outline btn-sm" style="margin-left:8px;padding:2px 10px;font-size:0.8em;">Open in GitHub</a>
+        <button class="btn btn-danger btn-sm" id="btn-confirm-destroy" onclick="confirmDestroyGenerated()" style="display:none;margin-left:8px;padding:2px 10px;font-size:0.8em;">Confirm destroy</button>
+      </div>
+    </div>
+    <div id="generate-plan-analysis" style="display:none; margin-top:8px;">
+      <div style="font-weight:600; margin-bottom:8px;">Terraform Plan Analysis</div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+        <span id="generate-plan-verdict" class="badge badge-blue">Needs Review</span>
+        <span id="generate-plan-counts" style="font-size:12px; color:var(--text-secondary);"></span>
+      </div>
+      <div style="display:grid; gap:8px;">
+        <div>
+          <div class="card-label" style="margin-bottom:4px;">LLM Analysis</div>
+          <pre id="generate-plan-analysis-text" class="modify-diff-block" style="max-height:220px; overflow:auto;"></pre>
+        </div>
+        <div>
+          <div class="card-label" style="margin-bottom:4px;">Plan Logs</div>
+          <pre id="generate-plan-logs" class="modify-diff-block" style="max-height:260px; overflow:auto;"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="log-box" id="apply-output" style="display:none;"></div>
+  <div id="suggestions-box" style="display:none; margin-top:16px;">
+    <div style="font-size:1.05em; font-weight:600; margin-bottom:8px; color:var(--accent);">&#128161; Suggested Next Steps</div>
+    <div id="suggestions-list"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let lastDeployedBranch = '';
+let lastDeployedRepo = '';
+
+function setPrompt(text) {
+  document.getElementById('prompt-input').value = text;
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function renderTokenUtilization(data) {
+  const section = document.getElementById('token-usage-section');
+  if (!data) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = '';
+  document.getElementById('token-usage-total').textContent = '$' + Number(data.estimated_cost || 0).toFixed(4);
+  document.getElementById('token-usage-input').textContent = (data.input_tokens || 0).toLocaleString();
+  document.getElementById('token-usage-output').textContent = (data.output_tokens || 0).toLocaleString();
+  document.getElementById('token-usage-total-tokens').textContent = (data.total_tokens || 0).toLocaleString();
+  document.getElementById('token-usage-model').textContent = data.model_id || '—';
+  document.getElementById('token-usage-note').textContent = data.note || 'Estimated token utilization';
+}
+
+function renderGeneratePlanAnalysis(result) {
+  const block = document.getElementById('generate-plan-analysis');
+  const verdictEl = document.getElementById('generate-plan-verdict');
+  const countsEl = document.getElementById('generate-plan-counts');
+  const analysisEl = document.getElementById('generate-plan-analysis-text');
+  const logsEl = document.getElementById('generate-plan-logs');
+  if (!block || !verdictEl || !countsEl || !analysisEl || !logsEl) return;
+
+  const hasAny = (result.plan_text && result.plan_text.trim()) || (result.plan_analysis && result.plan_analysis.trim());
+  if (!hasAny) {
+    block.style.display = 'none';
+    return;
+  }
+
+  const verdict = (result.plan_verdict || 'needs-review').toLowerCase();
+  const badgeClass = verdict === 'looks-good'
+    ? 'badge-green'
+    : (verdict === 'partial-match' || verdict === 'needs-review')
+      ? 'badge-yellow'
+      : 'badge-red';
+  verdictEl.className = 'badge ' + badgeClass;
+  verdictEl.textContent = verdict.replace(/-/g, ' ');
+
+  const counts = result.plan_counts || { add: 0, change: 0, destroy: 0 };
+  countsEl.textContent = `Plan: add=${counts.add || 0}, change=${counts.change || 0}, destroy=${counts.destroy || 0}`;
+
+  analysisEl.textContent = result.plan_analysis || 'No analysis available.';
+  logsEl.textContent = result.plan_text || 'Terraform plan logs were not found in this workflow run.';
+  block.style.display = '';
+}
+
+function updateStep(stepId, status) {
+  const el = document.getElementById(stepId);
+  const statusEl = document.getElementById(stepId + '-status');
+  el.classList.remove('step-active', 'step-done', 'step-error');
+  if (status === 'active') {
+    el.classList.add('step-active');
+    statusEl.textContent = 'Running...';
+  } else if (status === 'done') {
+    el.classList.add('step-done');
+    statusEl.textContent = 'Done';
+  } else if (status === 'error') {
+    el.classList.add('step-error');
+    statusEl.textContent = 'Failed';
+  } else {
+    statusEl.textContent = 'Waiting';
+  }
+}
+
+function resetSteps() {
+  ['step-generate', 'step-review', 'step-apply'].forEach(id => updateStep(id, ''));
+}
+
+async function generateInfra() {
+  const prompt = document.getElementById('prompt-input').value.trim();
+  if (!prompt) {
+    showAlert('gen-alert', 'Please describe what infrastructure you want to create.', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btn-generate');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Generating...';
+
+  // Show pipeline
+  document.getElementById('pipeline-section').style.display = '';
+  document.getElementById('code-section').style.display = 'none';
+  document.getElementById('action-section').style.display = 'none';
+  document.getElementById('apply-output').style.display = 'none';
+  document.getElementById('token-usage-section').style.display = 'none';
+  document.getElementById('btn-apply').style.display = '';
+  document.getElementById('btn-pr').style.display = '';
+  resetSteps();
+
+  updateStep('step-generate', 'active');
+  showAlert('gen-alert', 'AI is generating Terraform code from your prompt...', 'info');
+
+  try {
+    const data = await apiPost('/generate', { prompt: prompt });
+
+    if (!data.ok) {
+      updateStep('step-generate', 'error');
+      showAlert('gen-alert', 'Generation failed: ' + data.error, 'error');
+      btn.disabled = false;
+      btn.innerHTML = '&#10024; Generate Terraform Code';
+      return;
+    }
+
+    const result = data.data;
+
+    // Step 1: Generate - done
+    updateStep('step-generate', 'done');
+    renderTokenUtilization(result.token_utilization);
+
+    // Step 2: Review Code
+    updateStep('step-review', 'active');
+    const codeSection = document.getElementById('code-section');
+    codeSection.style.display = '';
+    document.getElementById('code-filename').textContent = (result.file_list || []).join(', ') || 'generated.tf';
+    document.getElementById('code-output').textContent = result.code;
+    updateStep('step-review', 'done');
+
+    // Show action buttons
+    document.getElementById('action-section').style.display = '';
+    document.getElementById('pr-result').style.display = 'none';
+    showAlert('gen-alert', 'Terraform code generated! Review the code, then push to repo and deploy via pipeline.', 'success');
+
+  } catch (e) {
+    updateStep('step-generate', 'error');
+    showAlert('gen-alert', 'Error: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '&#10024; Generate Terraform Code';
+}
+
+async function applyGenerated() {
+  if (!confirm('This will push the generated code to GitHub and trigger the CI/CD pipeline for deployment.\n\nContinue?')) return;
+
+  const btn = document.getElementById('btn-apply');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Pushing to repo &amp; triggering pipeline...';
+  updateStep('step-apply', 'active');
+
+  const output = document.getElementById('apply-output');
+  output.style.display = '';
+  output.textContent = 'Pushing code to GitHub repository...\n';
+
+  const sugBox = document.getElementById('suggestions-box');
+  if (sugBox) sugBox.style.display = 'none';
+
+  // Hide pipeline log section initially
+  const pipelineSection = document.getElementById('pipeline-log-section');
+  if (pipelineSection) pipelineSection.style.display = 'none';
+
+  try {
+    const prompt = document.getElementById('prompt-input').value.trim();
+    const data = await apiPost('/generate/apply', { prompt: prompt });
+
+    if (!data.ok) {
+      output.textContent += 'Error: ' + data.error + '\n';
+      updateStep('step-apply', 'error');
+      showAlert('gen-alert', 'Failed: ' + data.error, 'error');
+      btn.disabled = false;
+      btn.innerHTML = '&#9654; Deploy via Pipeline';
+      return;
+    }
+
+    const result = data.data;
+    output.textContent += `Code pushed to branch: ${result.branch}\n`;
+    output.textContent += `PR: ${result.pr_url}\n`;
+    output.textContent += `Files: ${result.pushed_files.join(', ')}\n\n`;
+    output.textContent += 'Triggering deployment pipeline...\n';
+
+    // Show PR result
+    document.getElementById('pr-result').style.display = '';
+    const link = document.getElementById('pr-link');
+    link.href = result.pr_url;
+    link.textContent = `PR #${result.pr_number}`;
+    document.getElementById('pr-branch').textContent = `branch: ${result.branch}`;
+
+    // Trigger the pipeline on the branch
+    const pipelineData = await apiPost('/github/pipeline/deploy', {
+      repo: result.repo,
+      workflow_file: result.workflow_file,
+      branch: result.branch,
+    });
+
+    if (!pipelineData.ok) {
+      output.textContent += 'Pipeline trigger failed: ' + pipelineData.error + '\n';
+      output.textContent += 'Code has been pushed to the branch. You can trigger the pipeline manually from GitHub.\n';
+      updateStep('step-apply', 'done');
+      document.getElementById('step-apply-status').textContent = 'PR Created';
+      showAlert('gen-alert', 'Code pushed but pipeline trigger failed. Run it manually from GitHub Actions.', 'info');
+      btn.disabled = false;
+      btn.innerHTML = '&#9654; Deploy via Pipeline';
+      return;
+    }
+
+    const runInfo = pipelineData.data;
+    lastDeployedBranch = runInfo.branch || result.branch || '';
+    lastDeployedRepo = result.repo || runInfo.repo || '';
+    if (runInfo.already_deployed) {
+      output.textContent += `This branch is already deployed at the current commit (run #${runInfo.run_number} on ${runInfo.branch}).\n`;
+      output.textContent += `GitHub Actions URL: ${runInfo.html_url}\n`;
+      updateStep('step-apply', 'done');
+      showAlert('gen-alert', `Branch ${runInfo.branch} is already deployed at this commit. A new pipeline was not started.`, 'info');
+      if (runInfo.html_url) {
+        document.getElementById('pipeline-log-section').style.display = '';
+        document.getElementById('pipeline-run-link').href = runInfo.html_url;
+        document.getElementById('pipeline-run-link').textContent = `Run #${runInfo.run_number}`;
+        document.getElementById('pipeline-status-badge').textContent = 'already deployed';
+        document.getElementById('pipeline-status-badge').className = 'badge badge-green';
+      }
+      btn.disabled = false;
+      btn.innerHTML = '&#9654; Deploy via Pipeline';
+      return;
+    }
+    if (runInfo.reused_existing_run) {
+      output.textContent += `A pipeline is already running on ${runInfo.branch} (run #${runInfo.run_number}). Reusing it instead of starting another apply.\n`;
+    } else {
+      output.textContent += `Pipeline started: Run #${runInfo.run_number}\n`;
+    }
+    output.textContent += `GitHub Actions URL: ${runInfo.html_url}\n\n`;
+
+    // Show pipeline monitoring section
+    if (pipelineSection) {
+      pipelineSection.style.display = '';
+      document.getElementById('pipeline-run-link').href = runInfo.html_url;
+      document.getElementById('pipeline-run-link').textContent = `Run #${runInfo.run_number}`;
+      document.getElementById('pipeline-status-badge').textContent = 'Running';
+      document.getElementById('pipeline-status-badge').className = 'badge badge-yellow';
+    }
+
+    showAlert('gen-alert', 'Pipeline running... Polling for completion.', 'info');
+
+    // Poll for pipeline completion
+    await pollPipelineStatus(result.repo, runInfo.run_id, result.branch, output, 'deploy');
+
+  } catch (e) {
+    output.textContent += 'Error: ' + e.message;
+    updateStep('step-apply', 'error');
+    showAlert('gen-alert', 'Error: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '&#9654; Deploy via Pipeline';
+}
+
+async function pollPipelineStatus(repo, runId, branch, outputEl, kind) {
+  const isDestroy = kind === 'destroy';
+  const isDestroyPlan = kind === 'destroy-plan';
+  const maxPolls = 90;  // ~12 minutes at 8s intervals
+  const confirmBtn = document.getElementById('btn-confirm-destroy');
+  if (confirmBtn && !isDestroyPlan) confirmBtn.style.display = 'none';
+
+  for (let i = 0; i < maxPolls; i++) {
+    await new Promise(r => setTimeout(r, 8000));
+
+    try {
+      const requirement = document.getElementById('prompt-input').value.trim();
+      const status = await apiGet(`/github/pipeline/status?repo=${encodeURIComponent(repo)}&run_id=${encodeURIComponent(runId)}&requirement=${encodeURIComponent(requirement)}`);
+      if (!status.ok) {
+        outputEl.textContent += 'Status check failed: ' + status.error + '\n';
+        continue;
+      }
+
+      const result = status.data;
+      if (!isDestroy && !isDestroyPlan) {
+        renderGeneratePlanAnalysis(result);
+      }
+
+      const badge = document.getElementById('pipeline-status-badge');
+      if (badge) {
+        badge.textContent = result.status;
+        badge.className = 'badge ' + (result.completed ? (result.success ? 'badge-green' : 'badge-red') : 'badge-yellow');
+      }
+
+      if (!result.completed) {
+        continue;
+      }
+
+      if (result.success) {
+        if (result.logs) {
+          outputEl.textContent += result.logs.slice(-3000) + '\n';
+        }
+        if (isDestroyPlan) {
+          outputEl.textContent += '\n--- Destroy plan complete. No resources were deleted. ---\n';
+          outputEl.textContent += 'Review the plan above, then click Confirm destroy to delete.\n';
+          updateStep('step-apply', 'done');
+          showAlert('gen-alert', `Destroy plan ready for ${branch}. Confirm destroy to delete AWS resources.`, 'info');
+          lastDeployedBranch = branch || lastDeployedBranch;
+          lastDeployedRepo = repo || lastDeployedRepo;
+          if (confirmBtn) confirmBtn.style.display = '';
+          if (badge) {
+            badge.textContent = 'awaiting confirm';
+            badge.className = 'badge badge-yellow';
+          }
+          return;
+        }
+        outputEl.textContent += isDestroy
+          ? '\n--- Destroy pipeline completed successfully ---\n'
+          : '\n--- Pipeline Completed Successfully ---\n';
+        if (!isDestroy && result.plan_analysis) {
+          outputEl.textContent += '\n--- Terraform Plan Analysis ---\n';
+          outputEl.textContent += result.plan_analysis.slice(0, 2500) + '\n';
+        }
+        updateStep('step-apply', 'done');
+        showAlert('gen-alert', isDestroy
+          ? `AWS resources from branch ${branch} were destroyed via GitHub Actions.`
+          : 'Infrastructure deployed successfully via GitHub Actions pipeline!', 'success');
+        return;
+      }
+
+      outputEl.textContent += (isDestroy || isDestroyPlan)
+        ? '\n--- Destroy pipeline failed ---\n'
+        : '\n--- Pipeline Failed ---\n';
+      if (result.error_text) {
+        outputEl.textContent += result.error_text + '\n';
+      } else if (result.logs) {
+        outputEl.textContent += result.logs.slice(-3000) + '\n';
+      }
+      updateStep('step-apply', 'error');
+      showAlert('gen-alert', (isDestroy || isDestroyPlan)
+        ? 'Destroy pipeline failed. Review the GitHub Actions logs.'
+        : 'Pipeline failed. Review the logs below for details.', 'error');
+      return;
+    } catch (e) {
+      outputEl.textContent += 'Poll error: ' + e.message + '\n';
+    }
+  }
+
+  outputEl.textContent += '\nPipeline still running after timeout. Check GitHub Actions directly.\n';
+  updateStep('step-apply', 'error');
+  showAlert('gen-alert', 'Pipeline timed out. Check GitHub Actions for the latest status.', 'error');
+}
+
+async function runDestroyPipeline(confirm) {
+  const output = document.getElementById('apply-output');
+  output.style.display = '';
+  const pipelineSection = document.getElementById('pipeline-log-section');
+  const confirmBtn = document.getElementById('btn-confirm-destroy');
+  if (confirmBtn) confirmBtn.style.display = 'none';
+
+  const data = await apiPost('/github/pipeline/destroy', {
+    repo: lastDeployedRepo || undefined,
+    branch: lastDeployedBranch || undefined,
+    confirm: !!confirm,
+  });
+  if (!data.ok) {
+    return data;
+  }
+
+  const runInfo = data.data;
+  lastDeployedBranch = runInfo.branch || lastDeployedBranch;
+  lastDeployedRepo = runInfo.repo || lastDeployedRepo;
+  output.textContent += confirm
+    ? `Confirmed destroy for branch: ${runInfo.branch}\n`
+    : `Destroy plan for branch: ${runInfo.branch} (no delete yet)\n`;
+  output.textContent += `Pipeline: Run #${runInfo.run_number}\n`;
+  output.textContent += `GitHub Actions URL: ${runInfo.html_url}\n\n`;
+
+  if (pipelineSection) {
+    pipelineSection.style.display = '';
+    document.getElementById('pipeline-run-link').href = runInfo.html_url;
+    document.getElementById('pipeline-run-link').textContent = `Run #${runInfo.run_number}`;
+    document.getElementById('pipeline-status-badge').textContent = 'Running';
+    document.getElementById('pipeline-status-badge').className = 'badge badge-yellow';
+  }
+
+  await pollPipelineStatus(
+    runInfo.repo,
+    runInfo.run_id,
+    runInfo.branch,
+    output,
+    confirm ? 'destroy' : 'destroy-plan',
+  );
+  return data;
+}
+
+async function destroyGenerated() {
+  if (!confirm('This will run a destroy plan for the latest deployed generate-infra branch.\n\nNo AWS resources will be deleted until you click Confirm destroy.')) return;
+
+  const btn = document.getElementById('btn-destroy');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Planning destroy...';
+
+  const output = document.getElementById('apply-output');
+  output.textContent = 'Starting destroy plan (resources will not be deleted yet)...\n';
+
+  try {
+    const data = await runDestroyPipeline(false);
+    if (!data.ok) {
+      output.textContent += 'Error: ' + data.error + '\n';
+      showAlert('gen-alert', 'Destroy plan failed: ' + data.error, 'error');
+    }
+  } catch (e) {
+    output.textContent += 'Error: ' + e.message + '\n';
+    showAlert('gen-alert', 'Error: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '&#128465; Destroy Resources';
+}
+
+async function confirmDestroyGenerated() {
+  if (!confirm('This will permanently delete the AWS resources listed in the destroy plan.\n\nThis cannot be undone. Continue?')) return;
+
+  const confirmBtn = document.getElementById('btn-confirm-destroy');
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Destroying...';
+  }
+
+  const output = document.getElementById('apply-output');
+  output.textContent += '\nUser confirmed destroy. Starting delete pipeline...\n';
+
+  try {
+    const data = await runDestroyPipeline(true);
+    if (!data.ok) {
+      output.textContent += 'Error: ' + data.error + '\n';
+      showAlert('gen-alert', 'Destroy failed: ' + data.error, 'error');
+    }
+  } catch (e) {
+    output.textContent += 'Error: ' + e.message + '\n';
+    showAlert('gen-alert', 'Error: ' + e.message, 'error');
+  }
+
+  if (confirmBtn) {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Confirm destroy';
+  }
+}
+
+function regenerate() {
+  document.getElementById('prompt-input').focus();
+  generateInfra();
+}
+
+function showSuggestions(suggestions) {
+  const box = document.getElementById('suggestions-box');
+  const list = document.getElementById('suggestions-list');
+  if (!suggestions || suggestions.length === 0) {
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = '';
+  list.innerHTML = '';
+  suggestions.forEach(s => {
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px 16px; margin-bottom:8px;';
+    let actionBtn = '';
+    if (s.action === 'regenerate') {
+      actionBtn = '<button class="btn btn-outline btn-sm" onclick="regenerate()" style="margin-top:8px; padding:4px 14px; font-size:0.85em;">&#10024; Regenerate</button>';
+    } else if (s.action === 'sso_login') {
+      actionBtn = '<button class="btn btn-outline btn-sm" onclick="window.location.href=\'/ui/settings\'" style="margin-top:8px; padding:4px 14px; font-size:0.85em;">Go to Settings</button>';
+    }
+    card.innerHTML =
+      '<div style="font-weight:600; color:var(--text-primary); margin-bottom:4px;">' + s.title + '</div>' +
+      '<div style="color:var(--text-secondary); font-size:0.92em;">' + s.detail + '</div>' +
+      actionBtn;
+    list.appendChild(card);
+  });
+}
+
+async function createGeneratePR() {
+  const btn = document.getElementById('btn-pr');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Creating PR...';
+
+  const prompt = document.getElementById('prompt-input').value.trim();
+
+  try {
+    const data = await apiPost('/generate/pr', { prompt: prompt });
+    if (data.ok) {
+      const r = data.data;
+      const isUpdate = r.action === 'pr_updated';
+      document.getElementById('pr-result').style.display = '';
+      const link = document.getElementById('pr-link');
+      link.href = r.pr_url;
+      link.textContent = `PR #${r.pr_number}`;
+      document.getElementById('pr-branch').textContent = `branch: ${r.branch}`;
+      updateStep('step-apply', 'done');
+      document.getElementById('step-apply-status').textContent = isUpdate ? 'PR Updated' : 'PR Created';
+      showAlert('gen-alert', isUpdate
+        ? `PR #${r.pr_number} updated with new changes! Review the latest commit.`
+        : `PR #${r.pr_number} created successfully! Review and merge it, then apply via your CI/CD pipeline.`, 'success');
+    } else {
+      showAlert('gen-alert', 'PR creation failed: ' + data.error, 'error');
+    }
+  } catch (e) {
+    showAlert('gen-alert', 'Error creating PR: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '&#128196; Create PR for Review';
+}
+</script>
+{% endblock %}

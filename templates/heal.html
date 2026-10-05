@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Healing Pipeline{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Healing Pipeline</h2>
+  <p>Run the full AI-driven self-healing pipeline: detect → fix → validate → apply/PR</p>
+</div>
+
+<div class="btn-group">
+  <button class="btn btn-primary" onclick="triggerHeal()" id="btn-heal">&#9889; Run Full Pipeline</button>
+  <button class="btn btn-outline" onclick="clearLog()">Clear Log</button>
+</div>
+
+<div id="heal-alert" class="alert"></div>
+
+<!-- Pipeline Steps -->
+<div class="card-grid" id="pipeline-steps" style="display:none;">
+  <div class="card" id="step-detect">
+    <div class="card-label">Step 1</div>
+    <div class="card-value" style="font-size:16px;">Detect Drift</div>
+    <div class="card-sub" id="step-detect-status">Pending</div>
+  </div>
+  <div class="card" id="step-fix">
+    <div class="card-label">Step 2</div>
+    <div class="card-value" style="font-size:16px;">Generate Fix (LLM)</div>
+    <div class="card-sub" id="step-fix-status">Pending</div>
+  </div>
+  <div class="card" id="step-validate">
+    <div class="card-label">Step 3</div>
+    <div class="card-value" style="font-size:16px;">Validate HCL</div>
+    <div class="card-sub" id="step-validate-status">Pending</div>
+  </div>
+  <div class="card" id="step-apply">
+    <div class="card-label">Step 4</div>
+    <div class="card-value" style="font-size:16px;">Apply / Create PR</div>
+    <div class="card-sub" id="step-apply-status">Pending</div>
+  </div>
+</div>
+
+<!-- Pipeline Output -->
+<div class="section">
+  <div class="section-title">Pipeline Log</div>
+  <div class="log-box" id="heal-log">Click "Run Full Pipeline" to start the self-healing process...</div>
+</div>
+
+<!-- Result Detail -->
+<div class="section" id="result-section" style="display:none;">
+  <div class="section-title">Pipeline Result</div>
+  <div class="log-box" id="heal-result"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateStep(step, status, cssClass) {
+  document.getElementById('step-' + step + '-status').innerHTML =
+    '<span class="badge badge-' + cssClass + '">' + status + '</span>';
+}
+
+function clearLog() {
+  document.getElementById('heal-log').textContent = '';
+}
+
+async function triggerHeal() {
+  const btn = document.getElementById('btn-heal');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Running pipeline...';
+  document.getElementById('pipeline-steps').style.display = 'grid';
+  document.getElementById('result-section').style.display = 'none';
+
+  const log = document.getElementById('heal-log');
+  log.textContent = '';
+
+  // Reset steps
+  ['detect', 'fix', 'validate', 'apply'].forEach(s =>
+    updateStep(s, 'Pending', 'blue')
+  );
+
+  showAlert('heal-alert', 'Running self-healing pipeline... this may take a moment.', 'info');
+  updateStep('detect', 'Running...', 'yellow');
+  logTo(log, 'Starting self-healing pipeline...');
+
+  try {
+    const data = await apiPost('/heal', {});
+    if (!data.ok) throw new Error(data.error);
+
+    const result = data.data;
+    const steps = result.steps || {};
+    const outcome = result.outcome || 'unknown';
+
+    // Update step cards
+    if (steps.detect_drift) {
+      const hasDrift = steps.detect_drift.has_drift;
+      updateStep('detect', hasDrift ? 'Drift Found' : 'No Drift', hasDrift ? 'yellow' : 'green');
+      logTo(log, hasDrift
+        ? '[DRIFT] ' + (steps.detect_drift.changes || []).length + ' change(s) detected'
+        : '[OK] No drift detected', hasDrift ? 'warn' : 'success');
+    }
+
+    if (steps.generate_fix) {
+      if (steps.generate_fix.error) {
+        updateStep('fix', 'Failed', 'red');
+        logTo(log, '[ERROR] Fix generation: ' + steps.generate_fix.error, 'error');
+      } else {
+        updateStep('fix', 'Generated', 'green');
+        logTo(log, '[FIX] Generated corrective code (' + steps.generate_fix.chars + ' chars)', 'success');
+      }
+    } else if (outcome === 'no_drift') {
+      updateStep('fix', 'Skipped', 'blue');
+    }
+
+    if (steps.validate) {
+      updateStep('validate', steps.validate.valid ? 'Passed' : 'Failed',
+        steps.validate.valid ? 'green' : 'red');
+      logTo(log, steps.validate.valid
+        ? '[VALIDATE] Terraform validation passed'
+        : '[VALIDATE] Validation failed', steps.validate.valid ? 'success' : 'error');
+    } else if (outcome === 'no_drift') {
+      updateStep('validate', 'Skipped', 'blue');
+    }
+
+    if (steps.apply) {
+      const ok = steps.apply.rc === 0;
+      updateStep('apply', ok ? 'Applied' : 'Failed', ok ? 'green' : 'red');
+      logTo(log, ok ? '[APPLY] Changes applied successfully' : '[APPLY] Apply failed', ok ? 'success' : 'error');
+    } else if (steps.pr) {
+      updateStep('apply', 'PR Created', 'green');
+      logTo(log, '[PR] ' + (steps.pr.pr_url || 'Branch: ' + steps.pr.branch), 'success');
+    } else if (outcome === 'no_drift') {
+      updateStep('apply', 'Skipped', 'blue');
+    }
+
+    logTo(log, '\nOutcome: ' + outcome);
+
+    // Show full result
+    document.getElementById('result-section').style.display = 'block';
+    document.getElementById('heal-result').textContent = JSON.stringify(result, null, 2);
+
+    const isSuccess = !outcome.includes('fail');
+    showAlert('heal-alert', 'Pipeline completed: ' + outcome, isSuccess ? 'success' : 'error');
+
+  } catch (e) {
+    logTo(log, '[ERROR] ' + e.message, 'error');
+    showAlert('heal-alert', 'Pipeline failed: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '&#9889; Run Full Pipeline';
+}
+
+function logTo(el, msg, cls) {
+  const span = document.createElement('span');
+  if (cls) span.className = 'log-' + cls;
+  span.textContent = msg + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+</script>
+{% endblock %}

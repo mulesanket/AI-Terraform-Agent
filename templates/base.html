@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Dashboard{% endblock %} — Terraform Agent</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <a href="/ui" style="text-decoration:none;color:inherit;">
+        <h1>&#9881; Terraform Agent</h1>
+        <span>Self-Healing Infrastructure</span>
+      </a>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="/ui" class="{% if active == 'dashboard' %}active{% endif %}">
+        <span class="icon">&#9632;</span> Dashboard
+      </a>
+      <a href="/ui/generate" class="{% if active == 'generate' %}active{% endif %}">
+        <span class="icon">&#10024;</span> Generate Infra
+      </a>
+      <a href="/ui/modify" class="{% if active == 'modify' %}active{% endif %}">
+        <span class="icon">&#9998;</span> Modify Infra
+      </a>
+      <a href="/ui/drift" class="{% if active == 'drift' %}active{% endif %}">
+        <span class="icon">&#8635;</span> Drift Detection
+      </a>
+      <a href="/ui/heal" class="{% if active == 'heal' %}active{% endif %}">
+        <span class="icon">&#9889;</span> Healing Pipeline
+      </a>
+      <a href="/ui/security" class="{% if active == 'security' %}active{% endif %}">
+        <span class="icon">&#128274;</span> Security & Cost
+      </a>
+      <a href="/ui/github" class="{% if active == 'github' %}active{% endif %}">
+        <span class="icon">&#128025;</span> GitHub
+      </a>
+      <a href="/ui/settings" class="{% if active == 'settings' %}active{% endif %}">
+        <span class="icon">&#9881;</span> Settings
+      </a>
+      {% if session.get('role') == 'admin' %}
+      <a href="/auth/admin" class="{% if active == 'admin' %}active{% endif %}">
+        <span class="icon">&#128101;</span> Admin
+      </a>
+      {% endif %}
+    </nav>
+
+    <!-- User info -->
+    <div class="sidebar-user">
+      {% if session.get('avatar_url') %}
+      <img src="{{ session.get('avatar_url') }}" alt="" class="sidebar-avatar">
+      {% else %}
+      <div class="sidebar-avatar-placeholder">{{ session.get('display_name', 'U')[0]|upper }}</div>
+      {% endif %}
+      <div class="sidebar-user-info">
+        <div class="sidebar-user-name">{{ session.get('display_name', 'User') }}</div>
+        <div class="sidebar-user-role">{{ session.get('role', 'user') }}</div>
+      </div>
+    </div>
+    <a href="/auth/logout" class="sidebar-logout-btn" title="Sign out">
+      <span class="icon">&#9211;</span> Logout
+    </a>
+
+    <div class="sidebar-footer">
+      <div id="health-status">Checking status...</div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    // Check health on every page load
+    checkHealth();
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

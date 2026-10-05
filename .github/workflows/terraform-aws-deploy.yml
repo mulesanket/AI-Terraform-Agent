@@ -1,0 +1,135 @@
+# Deploy via Pipeline: the agent POSTs { "ref": "<generated-branch>" }.
+# backend.tf (written from Settings TF_STATE_BUCKET) stores terraform.tfstate in S3.
+name: Terraform AWS Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-aws-deploy-${{ github.repository }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_STATE_KEY: ${{ vars.TF_STATE_KEY || format('{0}/terraform.tfstate', github.repository) }}
+  TF_STATE_REGION: ${{ vars.TF_STATE_REGION || 'us-east-1' }}
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  discover:
+    name: Discover Terraform configurations
+    runs-on: ubuntu-latest
+    outputs:
+      directories: ${{ steps.terraform.outputs.directories }}
+      found: ${{ steps.terraform.outputs.found }}
+    steps:
+      - name: Check out dispatched branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Show workflow ref
+        run: |
+          echo "github.ref=${{ github.ref }}"
+          echo "github.ref_name=${{ github.ref_name }}"
+          echo "github.sha=${{ github.sha }}"
+
+      - name: Find Terraform directories
+        id: terraform
+        shell: bash
+        run: |
+          if ls ./*.tf >/dev/null 2>&1; then
+            directories='["."]'
+          else
+            directories=$(find . -type f -name '*.tf' \
+              -not -path '*/.terraform/*' \
+              -not -path './.git/*' \
+              -printf '%h\n' |
+              sed 's|^\./||' |
+              sort -u |
+              jq -R -s -c 'split("\n") | map(select(length > 0)) | map(if . == "" then "." else . end)')
+          fi
+
+          echo "directories=$directories" >> "$GITHUB_OUTPUT"
+
+          if [ "$directories" = "[]" ] || [ -z "$directories" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: Terraform - ${{ matrix.directory }}
+    needs: discover
+    if: needs.discover.outputs.found == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJSON(needs.discover.outputs.directories) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - name: Check out dispatched branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: terraform-github-actions
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Ensure S3 backend
+        run: |
+          if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
+            echo "Using backend.tf from the repo (Settings TF_STATE_BUCKET)."
+            exit 0
+          fi
+          if [ -z "${TF_STATE_BUCKET}" ]; then
+            echo "::error::Set Terraform State S3 Bucket in the agent Settings (writes backend.tf) or set GitHub variable TF_STATE_BUCKET."
+            exit 1
+          fi
+          printf '%s\n' \
+            'terraform {' \
+            '  backend "s3" {}' \
+            '}' > backend.tf
+          echo "Wrote partial backend.tf; init will pass bucket/key/region."
+
+      - name: Terraform init
+        run: |
+          if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
+            terraform init -input=false -no-color -reconfigure
+          elif [ -n "${TF_STATE_BUCKET}" ]; then
+            terraform init -input=false -no-color -reconfigure \
+              -backend-config="bucket=${TF_STATE_BUCKET}" \
+              -backend-config="key=${TF_STATE_KEY}" \
+              -backend-config="region=${TF_STATE_REGION}" \
+              -backend-config="encrypt=true"
+          else
+            echo "::error::No S3 backend configured."
+            exit 1
+          fi
+
+      - name: Terraform plan
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply -input=false -no-color -auto-approve tfplan

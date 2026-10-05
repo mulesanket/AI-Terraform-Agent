@@ -1,0 +1,336 @@
+{% extends "base.html" %}
+{% block title %}Drift Detection{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>GitHub Plan Drift Detection</h2>
+  <p>Trigger Terraform plan from GitHub Actions and review drift in a readable format with AI resolution guidance.</p>
+</div>
+
+<div id="drift-alert" class="alert"></div>
+
+<div class="card" style="padding:18px; margin-bottom:16px;">
+  <div style="display:grid; grid-template-columns: 1fr 200px auto; gap:12px; align-items:end;">
+    <div>
+      <label class="form-label">GitHub Project</label>
+      <select id="project-select" class="form-input" style="width:100%;">
+        <option value="">Loading projects...</option>
+      </select>
+      <small class="form-hint">Projects are fetched from your authenticated GitHub account.</small>
+    </div>
+    <div>
+      <label class="form-label">Branch</label>
+      <input type="text" class="form-input" value="main" disabled>
+    </div>
+    <div class="btn-group" style="justify-content:flex-end;">
+      <button class="btn btn-outline" id="btn-refresh-projects" onclick="loadProjects()">Refresh Projects</button>
+      <button class="btn btn-primary" id="btn-check-drift" onclick="startDriftCheck()">Trigger Plan Drift Check</button>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="padding:16px; margin-bottom:16px;" id="run-status-card">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+    <div>
+      <div style="font-weight:700;">Workflow Status</div>
+      <div id="run-status-text" class="card-sub">No run started.</div>
+    </div>
+    <div id="run-link-wrap"></div>
+  </div>
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin-top:14px;">
+    <div class="card" style="padding:12px;">
+      <div class="card-label">Repository</div>
+      <div class="card-value" id="run-repo">-</div>
+    </div>
+    <div class="card" style="padding:12px;">
+      <div class="card-label">Run ID</div>
+      <div class="card-value" id="run-id">-</div>
+    </div>
+    <div class="card" style="padding:12px;">
+      <div class="card-label">Run Status</div>
+      <div class="card-value" id="run-status">-</div>
+    </div>
+    <div class="card" style="padding:12px;">
+      <div class="card-label">Conclusion</div>
+      <div class="card-value" id="run-conclusion">-</div>
+    </div>
+  </div>
+</div>
+
+<div id="drift-summary-wrap" style="display:none;">
+  <div class="card" style="padding:16px; margin-bottom:16px; border-left:4px solid var(--yellow);" id="drift-summary-card">
+    <div style="display:flex; align-items:flex-start; gap:12px;">
+      <div id="drift-summary-icon" style="font-size:28px;">&#9888;</div>
+      <div style="flex:1;">
+        <div id="drift-summary-title" style="font-size:18px; font-weight:700;">Drift Summary</div>
+        <div id="drift-summary-sub" class="card-sub" style="margin-top:5px;"></div>
+      </div>
+      <div id="drift-summary-badge"></div>
+    </div>
+  </div>
+</div>
+
+<div id="drift-resources-wrap" class="section" style="display:none;">
+  <div class="section-title">Resources Getting Changed</div>
+  <div id="drift-resources"></div>
+</div>
+
+<div id="resolution-wrap" class="section" style="display:none;">
+  <div class="section-title">AI Resolution Guidance</div>
+  <div class="card" style="padding:16px;">
+    <div id="resolution-content" style="white-space:pre-wrap; line-height:1.6; font-size:13px;"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title" style="cursor:pointer;" onclick="togglePlanLogs()">
+    Raw Plan Logs <span id="plan-toggle-icon" style="font-size:12px;">&#9654;</span>
+  </div>
+  <div id="plan-logs-wrap" style="display:none;">
+    <div class="log-box" id="plan-logs" style="max-height:420px; overflow-y:auto;">Run a drift check to see logs.</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let driftPollTimer = null;
+let activeRun = null;
+
+function togglePlanLogs() {
+  const box = document.getElementById('plan-logs-wrap');
+  const icon = document.getElementById('plan-toggle-icon');
+  const open = box.style.display !== 'none';
+  box.style.display = open ? 'none' : 'block';
+  icon.innerHTML = open ? '&#9654;' : '&#9660;';
+}
+
+function actionBadge(actions) {
+  if (!actions || actions.length === 0) return '<span class="badge badge-blue">unknown</span>';
+  if (actions.includes('delete') && actions.includes('create')) return '<span class="badge badge-red">replace</span>';
+  if (actions.includes('delete')) return '<span class="badge badge-red">delete</span>';
+  if (actions.includes('create')) return '<span class="badge badge-blue">create</span>';
+  if (actions.includes('update')) return '<span class="badge badge-yellow">update</span>';
+  return '<span class="badge badge-blue">' + escapeHtml(actions.join(', ')) + '</span>';
+}
+
+function updateRunInfo(data) {
+  document.getElementById('run-repo').textContent = data.repo || '-';
+  document.getElementById('run-id').textContent = data.run_id || '-';
+  document.getElementById('run-status').textContent = data.status || '-';
+  document.getElementById('run-conclusion').textContent = data.conclusion || '-';
+
+  const wrap = document.getElementById('run-link-wrap');
+  if (data.html_url) {
+    wrap.innerHTML = '<a href="' + data.html_url + '" target="_blank" class="btn btn-outline">Open GitHub Run</a>';
+  } else {
+    wrap.innerHTML = '';
+  }
+}
+
+async function loadProjects() {
+  const select = document.getElementById('project-select');
+  const btn = document.getElementById('btn-refresh-projects');
+  btn.disabled = true;
+  select.innerHTML = '<option value="">Loading projects...</option>';
+
+  try {
+    const res = await apiGet('/github/projects');
+    if (!res.ok) throw new Error(res.error || 'Unable to fetch projects');
+
+    const projects = res.data.projects || [];
+    if (projects.length === 0) {
+      select.innerHTML = '<option value="">No projects found</option>';
+      showAlert('drift-alert', 'No GitHub repositories found for this account.', 'info');
+      return;
+    }
+
+    select.innerHTML = '';
+    projects.forEach((p, idx) => {
+      const opt = document.createElement('option');
+      opt.value = p.full_name;
+      opt.textContent = p.full_name + (p.private ? ' (private)' : '');
+      if (idx === 0) opt.selected = true;
+      select.appendChild(opt);
+    });
+
+    showAlert('drift-alert', 'Projects loaded. Select one and run drift check.', 'success');
+  } catch (e) {
+    select.innerHTML = '<option value="">Failed to load projects</option>';
+    showAlert('drift-alert', e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function stopPolling() {
+  if (driftPollTimer) {
+    clearTimeout(driftPollTimer);
+    driftPollTimer = null;
+  }
+}
+
+async function startDriftCheck() {
+  stopPolling();
+
+  const project = document.getElementById('project-select').value;
+  if (!project) {
+    showAlert('drift-alert', 'Please select a GitHub project.', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btn-check-drift');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Starting...';
+
+  document.getElementById('drift-summary-wrap').style.display = 'none';
+  document.getElementById('drift-resources-wrap').style.display = 'none';
+  document.getElementById('resolution-wrap').style.display = 'none';
+  document.getElementById('plan-logs').textContent = 'Waiting for workflow logs...';
+  document.getElementById('run-status-text').textContent = 'Dispatching workflow...';
+
+  try {
+    const start = await apiPost('/github/drift/start', {
+      repo: project,
+      workflow_file: 'terraform-aws-deploy.yml'
+    });
+    if (!start.ok) throw new Error(start.error || 'Failed to start workflow');
+
+    activeRun = {
+      repo: start.data.repo,
+      run_id: start.data.run_id,
+    };
+
+    updateRunInfo(start.data);
+    showAlert('drift-alert', 'Plan workflow started. Waiting for completion...', 'info');
+    document.getElementById('run-status-text').textContent = 'Workflow running. Fetching status...';
+
+    await pollDriftResult();
+  } catch (e) {
+    showAlert('drift-alert', e.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = 'Trigger Plan Drift Check';
+    document.getElementById('run-status-text').textContent = 'Run failed to start.';
+  }
+}
+
+async function pollDriftResult() {
+  if (!activeRun || !activeRun.repo || !activeRun.run_id) return;
+
+  try {
+    const status = await apiGet('/github/drift/status?repo=' + encodeURIComponent(activeRun.repo) + '&run_id=' + encodeURIComponent(activeRun.run_id));
+    if (!status.ok) throw new Error(status.error || 'Failed to fetch workflow status');
+
+    const result = status.data;
+    updateRunInfo(result);
+
+    if (!result.completed) {
+      document.getElementById('run-status-text').textContent = 'Workflow is still running. Polling every 8 seconds...';
+      driftPollTimer = setTimeout(pollDriftResult, 8000);
+      return;
+    }
+
+    renderDriftResult(result);
+  } catch (e) {
+    document.getElementById('run-status-text').textContent = 'Failed to poll run status.';
+    showAlert('drift-alert', e.message, 'error');
+  } finally {
+    const btn = document.getElementById('btn-check-drift');
+    btn.disabled = false;
+    btn.innerHTML = 'Trigger Plan Drift Check';
+  }
+}
+
+function renderDriftResult(result) {
+  const resources = result.resources || [];
+  const planCounts = result.plan_counts || { add: 0, change: 0, destroy: 0 };
+  const hasDrift = !!result.has_drift;
+
+  document.getElementById('run-status-text').textContent = 'Workflow completed. Drift analysis ready.';
+  document.getElementById('plan-logs').textContent = result.plan_text || 'No logs available.';
+
+  const summaryWrap = document.getElementById('drift-summary-wrap');
+  const summaryCard = document.getElementById('drift-summary-card');
+  const summaryTitle = document.getElementById('drift-summary-title');
+  const summarySub = document.getElementById('drift-summary-sub');
+  const summaryBadge = document.getElementById('drift-summary-badge');
+  const summaryIcon = document.getElementById('drift-summary-icon');
+
+  if (!hasDrift) {
+    summaryIcon.innerHTML = '&#9989;';
+    summaryTitle.textContent = 'No Drift Detected';
+    summarySub.textContent = 'Terraform plan logs show no infrastructure drift for this project.';
+    summaryBadge.innerHTML = '<span class="badge badge-green">In Sync</span>';
+    summaryCard.style.borderLeft = '4px solid var(--green)';
+    document.getElementById('drift-resources-wrap').style.display = 'none';
+  } else {
+    const createCount = planCounts.add || resources.filter(r => (r.actions || []).includes('create')).length;
+    const updateCount = planCounts.change || resources.filter(r => (r.actions || []).includes('update')).length;
+    const deleteCount = planCounts.destroy || resources.filter(r => (r.actions || []).includes('delete')).length;
+
+    summaryIcon.innerHTML = '&#9888;';
+    summaryTitle.textContent = 'Drift Detected in Terraform Plan';
+    summarySub.textContent = createCount + ' create, ' + updateCount + ' update, ' + deleteCount + ' delete action(s) detected from plan step.';
+    summaryBadge.innerHTML = '<span class="badge badge-red">' + resources.length + ' Resource(s)</span>';
+    summaryCard.style.borderLeft = '4px solid var(--yellow)';
+
+    const container = document.getElementById('drift-resources');
+    container.innerHTML = '';
+    if (resources.length === 0 && (createCount + updateCount + deleteCount) > 0) {
+      container.innerHTML = '<div class="card" style="padding:12px; margin-bottom:10px;">' +
+        'Plan reported drift counts, but resource-level lines were not fully parseable from logs. Check raw plan logs below for exact addresses.' +
+        '</div>';
+    }
+    resources.forEach((res, idx) => {
+      let html = '<div class="drift-resource-card">';
+      html += '<div class="drift-resource-header" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">';
+      html += '<div><strong>' + escapeHtml(res.address || ('resource-' + idx)) + '</strong><div class="card-sub" style="margin-top:2px;">' + escapeHtml(res.type || 'unknown') + '</div></div>';
+      html += actionBadge(res.actions || []);
+      html += '</div>';
+
+      const diffs = res.diffs || [];
+      if (diffs.length > 0) {
+        html += '<table class="diff-table" style="margin-top:10px;">';
+        html += '<thead><tr><th>Attribute</th><th>Current</th><th>Planned</th></tr></thead><tbody>';
+        diffs.slice(0, 12).forEach(d => {
+          html += '<tr><td><code>' + escapeHtml(d.attribute || '-') + '</code></td><td class="diff-before">' + escapeHtml(String(d.before || '-')) + '</td><td class="diff-after">' + escapeHtml(String(d.after || '-')) + '</td></tr>';
+        });
+        html += '</tbody></table>';
+      }
+
+      html += '</div>';
+      container.innerHTML += html;
+    });
+
+    document.getElementById('drift-resources-wrap').style.display = 'block';
+  }
+
+  summaryWrap.style.display = 'block';
+
+  document.getElementById('resolution-content').textContent = result.llm_summary || 'No AI resolution available.';
+  document.getElementById('resolution-wrap').style.display = 'block';
+
+  if (result.llm_error) {
+    const current = document.getElementById('resolution-content').textContent;
+    document.getElementById('resolution-content').textContent =
+      current + '\n\nNote: LLM response fallback was used. Root cause: ' + result.llm_error;
+  }
+
+  if (result.conclusion && result.conclusion !== 'success') {
+    showAlert('drift-alert', 'Workflow finished with conclusion: ' + result.conclusion + '. Drift summary may be partial.', 'error');
+  } else {
+    showAlert('drift-alert', hasDrift ? 'Drift detected and summarized successfully.' : 'No drift detected.', hasDrift ? 'info' : 'success');
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text == null ? '' : String(text);
+  return div.innerHTML;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadProjects();
+});
+</script>
+{% endblock %}
