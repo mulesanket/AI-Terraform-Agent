@@ -40,7 +40,7 @@ if [[ "$OS_ID" == "amzn" ]]; then
     sudo usermod -aG docker ec2-user || true
 elif [[ "$OS_ID" == "ubuntu" ]]; then
     sudo apt-get update -y
-    sudo apt-get install -y docker.io docker-compose-plugin git python3 python3-venv python3-pip unzip curl jq
+    sudo apt-get install -y docker.io git python3 python3-venv python3-pip unzip curl jq
     sudo systemctl start docker
     sudo systemctl enable docker
     sudo usermod -aG docker ubuntu || true
